@@ -5273,3 +5273,19 @@ main.main.showing-logs > #mainLogs{display:flex;}
 }
 
 #composerMobileCtxBadge { display: none !important; }
+
+/* ── Kanban dependency graph (topology) view ──────────────────────────────── */
+/* Board ⇄ Graph toggle in the main kanban header. */
+.kanban-view-toggle{display:inline-flex;gap:2px;margin-right:6px;}
+.kanban-view-btn.active{color:var(--accent);background:var(--accent-bg);}
+/* The two views share .kanban-board-wrap; toggle via the [hidden] attribute.
+   .kanban-board sets display:flex, which beats the UA [hidden] rule, so each
+   view needs an explicit [hidden] override to actually hide. */
+.kanban-board[hidden]{display:none;}
+.kanban-graph{position:relative;height:100%;min-height:320px;}
+.kanban-graph[hidden]{display:none;}
+.kanban-graph-canvas{position:absolute;inset:0;width:100%;height:100%;}
+.kanban-graph-legend{position:absolute;left:10px;bottom:10px;display:flex;flex-wrap:wrap;gap:10px;padding:6px 10px;background:var(--bg);border:1px solid var(--border,rgba(128,128,128,.3));border-radius:8px;font-size:11px;color:var(--muted);box-shadow:0 1px 4px rgba(0,0,0,.12);}
+.kanban-graph-legend-item{display:inline-flex;align-items:center;gap:5px;}
+.kanban-graph-legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
+.kanban-graph .kanban-empty{padding:24px;color:var(--muted);font-size:13px;}

@@ -154,6 +154,24 @@ def _task_link_counts(conn, tasks):
     return counts
 
 
+def _board_edges(conn, task_ids):
+    """Dependency links where BOTH endpoints are in the current (filtered) board view.
+
+    Direction is parent_id -> child_id, mirroring the ``task_links`` table and the
+    ``↳`` children glyph used on cards. Powers the Kanban graph (topology) view.
+    """
+    try:
+        rows = conn.execute("SELECT parent_id, child_id FROM task_links").fetchall()
+    except Exception:
+        return []
+    edges = []
+    for row in rows:
+        parent, child = row["parent_id"], row["child_id"]
+        if parent in task_ids and child in task_ids:
+            edges.append({"source": parent, "target": child})
+    return edges
+
+
 def _comment_counts(conn):
     try:
         rows = conn.execute(
@@ -213,6 +231,7 @@ def _board_payload(parsed):
             })
         return {
             "columns": columns,
+            "edges": _board_edges(conn, {task.id for task in tasks}),
             "tenants": sorted({task.tenant for task in tasks if getattr(task, "tenant", None)}),
             "assignees": sorted({task.assignee for task in tasks if getattr(task, "assignee", None)}),
             "latest_event_id": latest_event_id,

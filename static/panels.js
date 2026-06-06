@@ -1643,6 +1643,7 @@ function _kanbanRenderBoard(){
   if (!board) return;
   if (!_kanbanBoard || !_kanbanBoard.columns) {
     board.innerHTML = _kanbanEmptyBoardHtml();
+    if (typeof kanbanGraphOnData === 'function') kanbanGraphOnData();
     return;
   }
   const columns = _kanbanVisibleTasks();
@@ -1651,9 +1652,13 @@ function _kanbanRenderBoard(){
   _kanbanRenderSidebar(columns);
   if (total === 0) {
     board.innerHTML = _kanbanEmptyBoardHtml();
+    if (typeof kanbanGraphOnData === 'function') kanbanGraphOnData();
     return;
   }
   board.innerHTML = _kanbanLanesByProfile ? _kanbanRenderProfileLanes(columns) : columns.map(_kanbanRenderColumn).join('');
+  // Keep the dependency-graph view (if active) in sync with each board render —
+  // single choke point for data refresh + filter/search. See kanban-graph.js.
+  if (typeof kanbanGraphOnData === 'function') kanbanGraphOnData();
 }
 
 function _kanbanCard(task, status){

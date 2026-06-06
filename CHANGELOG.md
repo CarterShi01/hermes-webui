@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Kanban dependency-graph (topology) view.** A Board ⇄ Graph toggle in the Kanban header renders tasks as nodes (colored by status) and `task_links` as directed parent→child edges, laid out as a DAG (Cytoscape + dagre, self-hosted under `static/vendor/`, lazy-loaded on first switch so board-only users never pay the ~500 KB). Click a node to open its task; edges into `blocked` tasks are highlighted. The board payload gains an additive `edges` field; no existing behavior changes. Toggle selection persists in `localStorage`. (@CarterShi01)
+
 ## [v0.51.296] — 2026-06-06 — Release JL (stage-3731 — remote-workspace blocked-root security fix)
 
 ### Security
