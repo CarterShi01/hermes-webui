@@ -907,6 +907,33 @@ window.addEventListener('visibilitychange',()=>{
 let _dynamicModelLabels={};
 window._configuredModelBadges=window._configuredModelBadges||{};
 const MODEL_STATE_KEY='hermes-webui-model-state';
+// ── one-creator: chat-mode dimension (orthogonal, first chip) ───────────────
+// 'agent' (default) = full Hermes brain + tools. 'pure-chat' = bypass the brain,
+// stream straight from the metered router carrying only this thread's history.
+// Decoupled from S so it works regardless of session-load order.
+const CHAT_MODE_KEY='hermes-webui-chat-mode';
+let _chatMode=(function(){try{return localStorage.getItem(CHAT_MODE_KEY)==='pure-chat'?'pure-chat':'agent';}catch(_){return 'agent';}})();
+function getChatMode(){return _chatMode;}
+function renderChatModeChip(){
+  try{
+    const chip=document.getElementById('chatModeChip');
+    const label=document.getElementById('chatModeChipLabel');
+    const pure=_chatMode==='pure-chat';
+    if(label) label.textContent=pure?'纯聊天':'脑';
+    if(chip){
+      chip.setAttribute('aria-pressed',pure?'true':'false');
+      chip.style.borderColor=pure?'#22c55e':'';
+      chip.style.color=pure?'#22c55e':'';
+    }
+  }catch(_){}
+}
+function toggleChatMode(){
+  _chatMode=_chatMode==='pure-chat'?'agent':'pure-chat';
+  try{localStorage.setItem(CHAT_MODE_KEY,_chatMode);}catch(_){}
+  renderChatModeChip();
+}
+try{window.getChatMode=getChatMode;window.toggleChatMode=toggleChatMode;window.renderChatModeChip=renderChatModeChip;}catch(_){}
+try{document.addEventListener('DOMContentLoaded',renderChatModeChip);}catch(_){}
 const PENDING_SESSION_MODEL_PREFIX='hermes-webui-pending-session-model:';
 const PENDING_SESSION_MODEL_MAX_AGE_MS=10*60*1000;
 
