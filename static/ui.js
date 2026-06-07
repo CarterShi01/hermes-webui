@@ -919,11 +919,11 @@ function renderChatModeChip(){
     const chip=document.getElementById('chatModeChip');
     const label=document.getElementById('chatModeChipLabel');
     const pure=_chatMode==='pure-chat';
-    if(label) label.textContent=pure?'纯聊天':'脑';
+    if(label) label.textContent=pure?'Pure Chat':'Brain';
     if(chip){
       chip.setAttribute('aria-pressed',pure?'true':'false');
       chip.style.borderColor=pure?'#22c55e':'';
-      chip.style.color=pure?'#22c55e':'';
+      chip.style.color=pure?'#22c55e':'#fff';
     }
   }catch(_){}
 }
