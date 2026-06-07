@@ -674,6 +674,7 @@ async function send(){
       model:_modelState.model,workspace:S.session.workspace,
       model_provider:_modelState.model_provider,
       profile:S.activeProfile||S.session.profile||'default',
+      chat_mode:(typeof getChatMode==='function'?getChatMode():'agent'),
       explicit_model_pick:_explicitPick||undefined,
       attachments:uploaded.length?uploaded:undefined
     })});

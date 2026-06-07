@@ -3037,6 +3037,7 @@ from api.streaming import (
     generate_session_title_for_session,
 )
 from api.gateway_chat import _run_gateway_chat_streaming, webui_gateway_chat_enabled
+from api.pure_chat import _run_pure_chat_streaming  # one-creator: brain-bypass pure-chat dimension
 from api.run_journal import (
     find_run_summary,
     read_run_events,
@@ -11032,6 +11033,14 @@ def _active_stream_blocks_chat_start(session, stream_id: str | None) -> bool:
     return False
 
 
+def _normalize_chat_mode(raw) -> str:
+    """Browser chat dimension (one-creator). 'pure-chat' bypasses the Hermes brain
+    and streams straight from the metered router; anything else is the default
+    'agent' (full Hermes brain + tools)."""
+    val = str(raw or "").strip().lower()
+    return "pure-chat" if val in ("pure-chat", "pure_chat", "purechat", "chat") else "agent"
+
+
 def _start_chat_stream_for_session(
     s,
     *,
@@ -11043,6 +11052,7 @@ def _start_chat_stream_for_session(
     normalized_model: bool = False,
     diag=None,
     goal_related: bool = False,
+    chat_mode: str = "agent",
 ):
     """Persist pending state, register an SSE channel, and start an agent turn."""
     attachments = attachments or []
@@ -11142,10 +11152,17 @@ def _start_chat_stream_for_session(
         STREAM_GOAL_RELATED[stream_id] = True
     diag.stage("worker_thread_start") if diag else None
     backend_is_gateway = webui_gateway_chat_enabled(get_config())
-    worker_target = _run_gateway_chat_streaming if backend_is_gateway else _run_agent_streaming
-    worker_kwargs = {"model_provider": model_provider}
-    if not backend_is_gateway:
-        worker_kwargs["goal_related"] = goal_related
+    if chat_mode == "pure-chat":
+        # one-creator: brain-bypass — stream straight from the metered router,
+        # carrying only this thread's history. No agent loop, no goal_related.
+        worker_target = _run_pure_chat_streaming
+        worker_kwargs = {"model_provider": model_provider}
+    elif backend_is_gateway:
+        worker_target = _run_gateway_chat_streaming
+        worker_kwargs = {"model_provider": model_provider}
+    else:
+        worker_target = _run_agent_streaming
+        worker_kwargs = {"model_provider": model_provider, "goal_related": goal_related}
     thr = threading.Thread(
         target=worker_target,
         args=(s.session_id, msg, model, workspace, stream_id, attachments),
@@ -11401,6 +11418,8 @@ def _handle_chat_start(handler, body, diag=None):
         msg = str(body.get("message", "")).strip()
         if not msg:
             return bad(handler, "message is required")
+        # one-creator: orthogonal chat-mode dimension (default agent / pure-chat).
+        chat_mode = _normalize_chat_mode(body.get("chat_mode"))
         diag.stage("normalize_attachments") if diag else None
         attachments = _normalize_chat_attachments(body.get("attachments") or [])[:20]
         diag.stage("resolve_workspace") if diag else None
@@ -11443,6 +11462,7 @@ def _handle_chat_start(handler, body, diag=None):
                     model_provider=request.provider or model_provider,
                     normalized_model=normalized_model,
                     diag=diag,
+                    chat_mode=chat_mode,
                 )
 
             def _legacy_adapter_factory():
@@ -11481,6 +11501,7 @@ def _handle_chat_start(handler, body, diag=None):
                 model_provider=model_provider,
                 normalized_model=normalized_model,
                 diag=diag,
+                chat_mode=chat_mode,
             )
         status = int(response.pop("_status", 200) or 200)
         diag.stage("response_write") if diag else None
