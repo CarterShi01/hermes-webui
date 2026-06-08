@@ -78,12 +78,14 @@ function _kanbanGraphElements(){
     const assignee = task.assignee || '';
     who[task.id] = assignee;
     const label = title.length > 38 ? title.slice(0, 37) + '…' : title;
+    const shortTitle = title.length > 14 ? title.slice(0, 13) + '…' : title;  // compact on-canvas label
     nodes.push({ data: {
       id: task.id,
-      // role visible at a glance: glabel = first line @assignee, second line title
-      label,
+      label,                       // full-ish title (kept for compatibility)
+      full: title,                 // full title, shown in the hover tooltip
       role: assignee || '—',
-      glabel: (assignee ? '@' + assignee + '\n' : '') + label,
+      // compact on-canvas label: @role + a very short title; full text shows on hover
+      glabel: (assignee ? '@' + assignee + '\n' : '') + shortTitle,
       status: status[task.id],
       assignee,
       running: status[task.id] === 'running' ? 1 : 0,
@@ -116,11 +118,11 @@ function _kanbanGraphStyle(){
   return [
     { selector: 'node', style: {
       'background-color': (ele) => _KANBAN_STATUS_COLORS[ele.data('status')] || _KANBAN_STATUS_COLORS.triage,
-      'label': 'data(glabel)',          // line 1 @role, line 2 task title
+      'label': 'data(glabel)',          // compact: line 1 @role, line 2 short title (full text on hover)
       'color': text,
-      'font-size': '10px',
+      'font-size': '8px',
       'text-wrap': 'wrap',
-      'text-max-width': '140px',
+      'text-max-width': '92px',
       'text-valign': 'bottom',
       'text-margin-y': 4,
       'width': 20,
@@ -237,6 +239,31 @@ async function _kanbanGraphRender(){
     const id = evt.target.id();
     if (typeof loadKanbanTask === 'function') loadKanbanTask(id);
   });
+
+  // Hover tooltip: the canvas shows only a short label; the full title + role +
+  // status appear on mouseover. Bound once per (re)build; the incremental path
+  // reuses the same cy + tip, so handlers persist across live refreshes.
+  mount.style.position = 'relative';
+  const tip = document.createElement('div');
+  tip.className = 'kanban-graph-tip';
+  tip.setAttribute('style', 'position:absolute;display:none;pointer-events:none;z-index:20;max-width:240px;'
+    + 'padding:6px 8px;font-size:11px;line-height:1.35;border-radius:6px;background:rgba(20,20,20,.92);'
+    + 'color:#f0f0f0;box-shadow:0 2px 10px rgba(0,0,0,.35);white-space:normal');
+  mount.appendChild(tip);
+  const statusLabel = (s) => (typeof _kanbanColumnLabel === 'function') ? _kanbanColumnLabel(s) : s;
+  _kanbanCy.on('mouseover', 'node', (evt) => {
+    const d = evt.target.data();
+    const dot = _KANBAN_STATUS_COLORS[d.status] || _KANBAN_STATUS_COLORS.triage;
+    tip.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dot};margin-right:5px"></span>`
+      + `<b>@${esc(d.role)}</b> · ${esc(statusLabel(d.status))}<br>${esc(d.full || d.label || '')}`;
+    const p = evt.target.renderedPosition();
+    tip.style.left = (p.x + 14) + 'px';
+    tip.style.top = (p.y - 6) + 'px';
+    tip.style.display = 'block';
+  });
+  _kanbanCy.on('mouseout', 'node', () => { tip.style.display = 'none'; });
+  _kanbanCy.on('pan zoom drag', () => { tip.style.display = 'none'; });
+
   try { _kanbanCy.fit(undefined, 30); } catch(_){}
   _kanbanGraphAnimate();
 }
