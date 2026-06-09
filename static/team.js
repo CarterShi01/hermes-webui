@@ -41,6 +41,18 @@ function _teamInjectStyle(){
   #mainTeam .team-view-btn.active{background:var(--accent,#5b8def);color:#fff;border-color:transparent}
   #teamCenter .team-cy{position:absolute;inset:0}
   #teamCenter .team-scroll{position:absolute;inset:0;overflow:auto;padding:10px 14px}
+  #teamCenter .team-matrix{border-collapse:separate;border-spacing:0;font-size:11px}
+  #teamCenter .team-matrix th,#teamCenter .team-matrix td{border-bottom:1px solid var(--border,#eee);border-right:1px solid var(--border,#eee)}
+  #teamCenter .team-matrix thead th{position:sticky;top:0;z-index:3;background:var(--bg,#fff);vertical-align:bottom;padding:4px 0}
+  #teamCenter .team-matrix .tm-rolehead{cursor:pointer}
+  #teamCenter .team-matrix .tm-rolehead span{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;font-weight:500;color:var(--muted,#6b7280);display:inline-block;padding:4px 1px}
+  #teamCenter .team-matrix .tm-corner{position:sticky;left:0;top:0;z-index:4;background:var(--bg,#fff);text-align:left;color:var(--muted,#6b7280);min-width:170px;vertical-align:bottom;padding:4px 8px;font-weight:500}
+  #teamCenter .team-matrix .tm-cap{position:sticky;left:0;z-index:2;background:var(--bg,#fff);cursor:pointer;white-space:nowrap;max-width:210px;overflow:hidden;text-overflow:ellipsis;padding:3px 8px}
+  #teamCenter .team-matrix .tm-cap:hover{background:var(--surface,#f3f4f6)}
+  #teamCenter .team-matrix .tm-x{color:var(--muted,#6b7280);font-size:10px}
+  #teamCenter .team-matrix .tm-cell{width:17px;min-width:17px;height:18px;padding:0}
+  #teamCenter .team-matrix tbody tr:hover td{box-shadow:inset 0 0 0 9999px rgba(14,165,233,.10)}
+  #teamCenter .team-matrix .tm-colhl{box-shadow:inset 0 0 0 9999px rgba(14,165,233,.12)}
   #teamCenter .team-note{position:absolute;top:6px;left:12px;font-size:11px;color:var(--muted,#6b7280);z-index:2;pointer-events:none;background:var(--main-bg,#fff);padding:0 4px;border-radius:4px}
   #teamInfo .ti-stat{color:var(--muted,#6b7280)} #teamInfo .ti-legend{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted,#6b7280)}
   #teamInfo .ti-legend span{display:inline-flex;align-items:center;gap:4px} #teamInfo .ti-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
@@ -146,10 +158,13 @@ function _teamRenderGraph(center){
       { selector: 'node[kind="role"][live="blocked"]', style: { 'border-width': 4, 'border-color': '#e05252' } },
       { selector: 'node[kind="role"][live="ready"]',   style: { 'border-width': 4, 'border-color': '#5b8def' } },
       { selector: 'node[kind="role"].lp', style: { 'border-width': 8 } },
+      { selector: '.faded', style: { 'opacity': 0.18 } },
       { selector: 'node.team-sel', style: { 'border-width': 4, 'border-color': '#0ea5e9' } },
     ],
     layout: { name: window.cytoscape.__dagreRegistered ? 'dagre' : 'breadthfirst', rankDir: 'TB', nodeSep: 16, rankSep: 56, directed: true, padding: 18 }, wheelSensitivity: 0.2 });
   _teamCy.on('tap', 'node[kind="role"]', evt => _teamSelectRole(evt.target.data('role')));
+  _teamCy.on('mouseover', 'node', evt => { const hood = evt.target.closedNeighborhood(); _teamCy.elements().not(hood).addClass('faded'); });
+  _teamCy.on('mouseout', 'node', () => _teamCy.elements().removeClass('faded'));
   if (_teamSel && _teamSel.role){ const n = _teamCy.getElementById('role__' + _teamSel.role); if (n) n.addClass('team-sel'); }
   setTimeout(() => { try { _teamCy && _teamCy.resize(); _teamCy && _teamCy.fit(undefined, 24); } catch(_){} }, 60);
   _teamStartLive();
@@ -168,26 +183,30 @@ function _teamRenderRoster(center){
   wrap.innerHTML = html;
 }
 
+// Reuse view = capability × role matrix (the industry skills-matrix pattern):
+// rows = capabilities sorted by reuse count desc (most-shared on top = the reuse
+// hierarchy), cols = roles grouped by division, cells colored by source. Hover a
+// row/column → it highlights; click → detail. Matrix beats a bipartite hairball
+// for "what is reused" (visvar.github.io/abdelaal2022comparative).
 function _teamRenderReuse(center){
-  const caps = _teamBuildCaps().filter(c => c.roles.length >= 2);
-  const host = document.createElement('div'); host.className = 'team-cy'; center.appendChild(host);
-  const note = document.createElement('div'); note.className = 'team-note'; note.textContent = 'Shared capabilities reused by ≥2 roles — click a hub for detail'; center.appendChild(note);
-  if (!caps.length){ host.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:12px">No capability shared by ≥2 roles.</div>'; return; }
-  const roleSet = new Set(); caps.forEach(c => c.roles.forEach(r => roleSet.add(r)));
-  const nodes = [], edges = [];
-  caps.forEach(c => { nodes.push({ data: { id: c.id, label: c.label.replace(/^[^/]*\//, '') + ' ×' + c.roles.length, kind: 'cap', color: _TEAM_SRC_COLOR[c.source.cls] || '#6b7280' } }); c.roles.forEach(rn => edges.push({ data: { id: c.id + '__' + rn, source: c.id, target: 'r__' + rn } })); });
-  roleSet.forEach(rn => { const r = _teamRole(rn) || {}; nodes.push({ data: { id: 'r__' + rn, label: rn, kind: 'role', role: rn, color: _TEAM_AUTONOMY_COLOR[r.autonomy] || '#6b7280' } }); });
-  _teamCy = cytoscape({ container: host, elements: { nodes, edges }, style: [
-      { selector: 'node', style: { 'label': 'data(label)', 'font-size': 9, 'color': '#fff', 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': 100, 'width': 'label', 'height': 'label', 'padding': 6, 'shape': 'round-rectangle' } },
-      { selector: 'node[kind="cap"]', style: { 'background-color': 'data(color)', 'font-weight': 'bold', 'padding': 9, 'border-width': 2, 'border-color': '#fff' } },
-      { selector: 'node[kind="role"]', style: { 'background-color': 'data(color)' } },
-      { selector: 'edge', style: { 'width': 1, 'line-color': '#d1d5db', 'curve-style': 'haystack', 'haystack-radius': 0.4 } },
-    ],
-    layout: { name: 'concentric', concentric: n => n.data('kind') === 'cap' ? 2 : 1, levelWidth: () => 1, minNodeSpacing: 16, padding: 24 }, wheelSensitivity: 0.2 });
-  _teamCy.on('tap', 'node[kind="cap"]', e => _teamSelectCapability(e.target.id()));
-  _teamCy.on('tap', 'node[kind="role"]', e => _teamSelectRole(e.target.data('role')));
-  setTimeout(() => { try { _teamCy && _teamCy.resize(); _teamCy && _teamCy.fit(undefined, 24); } catch(_){} }, 60);
+  const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
+  const caps = _teamBuildCaps().slice().sort((a, b) => b.roles.length - a.roles.length || a.label.localeCompare(b.label));
+  const roles = _teamRoles().slice().sort((a, b) => (_TEAM_DIV_ORDER.indexOf(a.division) - _TEAM_DIV_ORDER.indexOf(b.division)) || a.name.localeCompare(b.name));
+  if (!caps.length || !roles.length){ wrap.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:12px">No capabilities.</div>'; return; }
+  let h = '<table class="team-matrix"><thead><tr><th class="tm-corner">capability ↓ · ×reuse / role →</th>';
+  roles.forEach((r, i) => { h += `<th class="tm-rolehead" data-col="${i}" style="border-top:3px solid ${_TEAM_DIV_COLORS[r.division] || '#999'}" title="${_teamEsc(r.name)} · ${_teamEsc(r.division)}" onclick="_teamSelectRole('${_teamEsc(r.name)}')" onmouseover="_teamColHL(${i},true)" onmouseout="_teamColHL(${i},false)"><span>${_teamEsc(r.name)}</span></th>`; });
+  h += '</tr></thead><tbody>';
+  caps.forEach(c => {
+    const used = new Set(c.roles);
+    const col = _TEAM_SRC_COLOR[c.source.cls] || '#999';
+    h += `<tr><td class="tm-cap" style="border-left:4px solid ${col}" onclick="_teamSelectCapability('${c.id}')" title="${_teamEsc(c.label)} — ${_teamEsc(c.source.label)}"><span>${_teamEsc(c.label.replace(/^[^/]*\//, ''))}</span> <span class="tm-x">×${c.roles.length}</span></td>`;
+    roles.forEach((r, i) => { const on = used.has(r.name); h += `<td class="tm-cell" data-col="${i}"${on ? ` style="background:${col}"` : ''} onmouseover="_teamColHL(${i},true)" onmouseout="_teamColHL(${i},false)"></td>`; });
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+  wrap.innerHTML = h;
 }
+function _teamColHL(i, on){ document.querySelectorAll('#teamCenter .team-matrix [data-col="' + i + '"]').forEach(el => el.classList.toggle('tm-colhl', on)); }
 
 async function _teamRenderCalibrate(center){
   const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
