@@ -4702,41 +4702,6 @@ def _serve_manifest(handler) -> bool:
     return j(handler, {"error": "not found"}, status=404)
 
 
-def _handle_team(handler, parsed) -> bool:
-    """Read-only: serve the team-as-code source (team/*.yaml + routing.md) as raw
-    text so the WebUI Team panel can parse it client-side with js-yaml. The repo
-    stays the single source of truth; this endpoint never writes. Fixed filenames
-    only (no path params) → no traversal surface. Dir overridable via OC_TEAM_DIR."""
-    from pathlib import Path as _Path
-    base = _Path(os.environ.get("OC_TEAM_DIR", "/one-creator/team"))
-    files = {"roster": "roster.yaml", "plugins": "plugins.yaml",
-             "engines": "engines.yaml", "routing": "routing.md"}
-    out = {}
-    for key, fn in files.items():
-        p = base / fn
-        try:
-            out[key] = p.read_text(encoding="utf-8") if p.is_file() else None
-        except Exception:
-            out[key] = None
-    return j(handler, {"team": out, "base": str(base)})
-
-
-def _handle_team_eval(handler, parsed) -> bool:
-    """Read-only: serve team/eval/eval-summary.json (the flat router hit-rate
-    produced offline by promptfoo + summarize.py) for the Team Calibrate view.
-    Returns {"summary": <parsed-or-null>}."""
-    from pathlib import Path as _Path
-    base = _Path(os.environ.get("OC_TEAM_DIR", "/one-creator/team"))
-    p = base / "eval" / "eval-summary.json"
-    summary = None
-    try:
-        if p.is_file():
-            summary = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        summary = None
-    return j(handler, {"summary": summary})
-
-
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
 
@@ -4881,10 +4846,10 @@ def handle_get(handler, parsed) -> bool:
         return True
 
     # ── Insights / knowledge status ──
-    if parsed.path == "/api/team":
-        return _handle_team(handler, parsed)
-    if parsed.path == "/api/team/eval":
-        return _handle_team_eval(handler, parsed)
+    # team-as-code panel — isolated module, single-line dispatch (minimal invasion)
+    from api import team_routes
+    if team_routes.handle(handler, parsed):
+        return True
     if parsed.path == "/api/insights":
         return _handle_insights(handler, parsed)
     if parsed.path == "/api/project-os/dashboard":
