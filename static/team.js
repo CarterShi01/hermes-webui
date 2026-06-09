@@ -1,19 +1,17 @@
-// ── Team panel — self-contained, full-area overlay (minimal-invasion) ─────────
-// Mirrors the Kanban layout (left info column + big center diagram) but is 100%
-// INDEPENDENT of the host webui: the ONLY hook is a rail button calling
-// teamOpen(). This file builds its own overlay covering the content area (right
-// of the 48px rail, below the titlebar), manages its own show/hide (it closes
-// when any other rail/sidebar nav tab is clicked), and reads team/*.yaml +
-// eval-summary.json read-only via /api/team and /api/team/eval. It does NOT touch
-// panels.js / switchPanel / the sidebar panel-view system.
+// ── Team panel — renders like Kanban (sidebar info + big center diagram) ──────
+// Clean tab, switched by the host's switchPanel() exactly like chat→kanban: the
+// rail Team button calls switchPanel('team'), which reveals the sidebar #panelTeam
+// (left info: stats, legend, drill-down detail) and the main #mainTeam (center:
+// org tree / roster / reuse / calibrate) via the `showing-team` class, then calls
+// loadTeamPanel() — mirroring loadKanban(). This file only renders into those
+// existing containers; it does not touch the panel/main switching machinery.
 //
-// Views (left column switches them): Graph (org tree, live Kanban overlay) ·
+// Views (toggle in the main header): Graph (org tree, live Kanban overlay) ·
 // Roster (table) · Reuse (capability bipartite) · Calibrate (promptfoo hit-rate).
-// Clicking a node fills the left detail pane with source-badged capabilities.
-//
-// No bundler: vendored cytoscape+dagre + js-yaml lazy-injected on first open.
+// Reads team/*.yaml + eval-summary.json read-only via /api/team*. No bundler:
+// vendored cytoscape+dagre + js-yaml lazy-injected on first open.
 
-let _teamData = null, _teamView = 'graph', _teamCy = null, _teamSel = null, _teamMounted = false;
+let _teamData = null, _teamView = null, _teamCy = null, _teamSel = null, _teamStyled = false;
 let _teamLiveTimer = null, _teamPulseTimer = null, _teamPulseOn = false;
 const _TEAM_VIEW_KEY = 'hermes-webui-team-view';
 
@@ -35,94 +33,44 @@ async function _teamEnsureLibs(){
 }
 
 function _teamInjectStyle(){
-  if (document.getElementById('teamPanelStyle')) return;
+  if (_teamStyled) return; _teamStyled = true;
   const css = `
-  #teamRoot{position:fixed;z-index:15;display:flex;background:var(--main-bg,#fff);color:var(--text,#111)}
-  #teamRoot .team-left{width:280px;flex-shrink:0;border-right:1px solid var(--border,#e5e7eb);background:var(--sidebar,#fafafa);display:flex;flex-direction:column;overflow:hidden}
-  #teamRoot .team-center{flex:1;position:relative;min-width:0;overflow:hidden}
-  #teamRoot .tl-head{padding:12px 14px 8px;border-bottom:1px solid var(--border,#eee)}
-  #teamRoot .tl-head h2{margin:0;font-size:15px}
-  #teamRoot .tl-head .tl-sub{color:var(--muted,#6b7280);font-size:11.5px;margin-top:2px}
-  #teamRoot .tl-views{display:flex;flex-wrap:wrap;gap:4px;padding:8px 12px}
-  #teamRoot .tl-views button{flex:1 1 calc(50% - 4px);border:1px solid var(--border,#e5e7eb);background:var(--bg,#fff);color:var(--muted,#6b7280);font-size:12px;padding:5px 8px;border-radius:6px;cursor:pointer}
-  #teamRoot .tl-views button.active{background:var(--accent,#5b8def);color:#fff;border-color:transparent}
-  #teamRoot .tl-legend{padding:4px 14px 8px;font-size:11px;color:var(--muted,#6b7280);display:flex;flex-wrap:wrap;gap:6px}
-  #teamRoot .tl-legend span{display:inline-flex;align-items:center;gap:4px}
-  #teamRoot .tl-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
-  #teamRoot .tl-detail{flex:1;overflow:auto;padding:12px 14px;border-top:1px solid var(--border,#eee)}
-  #teamRoot .tl-detail h3{margin:0 0 2px;font-size:14px}
-  #teamRoot .ts-sub{color:var(--muted,#6b7280);font-size:12px}
-  #teamRoot .ts-sec{margin:11px 0 4px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#6b7280)}
-  #teamRoot .team-cy{position:absolute;inset:0}
-  #teamRoot .team-scroll{position:absolute;inset:0;overflow:auto;padding:10px 14px}
-  #teamRoot .team-note{position:absolute;top:6px;left:12px;font-size:11px;color:var(--muted,#6b7280);z-index:2;pointer-events:none;background:var(--main-bg,#fff);padding:0 4px;border-radius:4px}
-  #teamRoot .team-div-h{margin:14px 0 4px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,#6b7280)}
-  #teamRoot .team-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
-  #teamRoot .team-tbl th{text-align:left;color:var(--muted,#6b7280);font-weight:500;padding:4px 8px;border-bottom:1px solid var(--border,#e5e7eb)}
-  #teamRoot .team-tbl td{padding:5px 8px;border-bottom:1px solid var(--border,#f0f0f0);vertical-align:top}
-  #teamRoot .team-row{cursor:pointer} #teamRoot .team-row:hover{background:var(--surface,#f6f7f9)}
-  #teamRoot .team-badge{display:inline-block;font-size:10.5px;line-height:1.5;padding:0 6px;border-radius:10px;margin:1px 3px 1px 0;white-space:nowrap;border:1px solid transparent}
-  #teamRoot .tb-native{background:#e7f6ec;color:#1f7a3f;border-color:#bfe3cc} #teamRoot .tb-self{background:#f3e8ff;color:#7c3aed;border-color:#e4cdff}
-  #teamRoot .tb-oss{background:#e8f0fe;color:#1a56db;border-color:#cdddfb} #teamRoot .tb-official{background:#fff4e0;color:#a8620b;border-color:#f3dcb0}
-  #teamRoot .tb-mcp{background:#e0f5f8;color:#0a6e80;border-color:#bce6ec} #teamRoot .tb-shared{background:#eef0f2;color:#475569;border-color:#d8dde2;font-style:italic}
-  #teamRoot .team-chip{display:inline-block;font-size:11px;padding:1px 7px;border-radius:6px;background:var(--surface,#f3f4f6);margin:2px 4px 2px 0}
-  @media(max-width:640px){#teamRoot{flex-direction:column}#teamRoot .team-left{width:auto;max-height:46%;border-right:0;border-bottom:1px solid var(--border,#eee)}}
+  #teamCenter .team-cy{position:absolute;inset:0}
+  #teamCenter .team-scroll{position:absolute;inset:0;overflow:auto;padding:10px 14px}
+  #teamCenter .team-note{position:absolute;top:6px;left:12px;font-size:11px;color:var(--muted,#6b7280);z-index:2;pointer-events:none;background:var(--main-bg,#fff);padding:0 4px;border-radius:4px}
+  #teamInfo .ti-stat{color:var(--muted,#6b7280)} #teamInfo .ti-legend{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted,#6b7280)}
+  #teamInfo .ti-legend span{display:inline-flex;align-items:center;gap:4px} #teamInfo .ti-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+  #panelTeam .team-div-h,#teamCenter .team-div-h{margin:14px 0 4px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,#6b7280)}
+  #teamCenter .team-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  #teamCenter .team-tbl th{text-align:left;color:var(--muted,#6b7280);font-weight:500;padding:4px 8px;border-bottom:1px solid var(--border,#e5e7eb)}
+  #teamCenter .team-tbl td{padding:5px 8px;border-bottom:1px solid var(--border,#f0f0f0);vertical-align:top}
+  #teamCenter .team-row{cursor:pointer} #teamCenter .team-row:hover{background:var(--surface,#f6f7f9)}
+  #panelTeam .team-badge,#teamCenter .team-badge{display:inline-block;font-size:10.5px;line-height:1.5;padding:0 6px;border-radius:10px;margin:1px 3px 1px 0;white-space:nowrap;border:1px solid transparent}
+  .tb-native{background:#e7f6ec;color:#1f7a3f;border-color:#bfe3cc} .tb-self{background:#f3e8ff;color:#7c3aed;border-color:#e4cdff}
+  .tb-oss{background:#e8f0fe;color:#1a56db;border-color:#cdddfb} .tb-official{background:#fff4e0;color:#a8620b;border-color:#f3dcb0}
+  .tb-mcp{background:#e0f5f8;color:#0a6e80;border-color:#bce6ec} .tb-shared{background:#eef0f2;color:#475569;border-color:#d8dde2;font-style:italic}
+  #panelTeam .team-chip,#teamCenter .team-chip{display:inline-block;font-size:11px;padding:1px 7px;border-radius:6px;background:var(--surface,#f3f4f6);margin:2px 4px 2px 0}
+  #panelTeam .ts-sub{color:var(--muted,#6b7280);font-size:12px} #panelTeam .ts-sec{margin:11px 0 4px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#6b7280)}
+  #panelTeam #teamDetail h3{margin:0 0 2px;font-size:14px}
   `;
   const el = document.createElement('style'); el.id = 'teamPanelStyle'; el.textContent = css; document.head.appendChild(el);
 }
 
-function _teamMount(){
-  if (_teamMounted) return; _teamMounted = true;
+// Entry point — mirrors loadKanban(). Called by switchPanel('team') and Refresh.
+async function loadTeamPanel(force){
   _teamInjectStyle();
-  const root = document.createElement('div'); root.id = 'teamRoot'; root.style.display = 'none';
-  root.innerHTML =
-    '<div class="team-left">'
-    + '<div class="tl-head"><h2>Team</h2><div class="tl-sub" id="teamStats"></div></div>'
-    + '<div class="tl-views">'
-    +   '<button data-view="graph" onclick="setTeamView(\'graph\')">Graph</button>'
-    +   '<button data-view="roster" onclick="setTeamView(\'roster\')">Roster</button>'
-    +   '<button data-view="reuse" onclick="setTeamView(\'reuse\')">Reuse</button>'
-    +   '<button data-view="calibrate" onclick="setTeamView(\'calibrate\')">Calibrate</button>'
-    + '</div>'
-    + '<div class="tl-legend" id="teamLegend"></div>'
-    + '<div class="tl-detail" id="teamDetail"><div class="ts-sub">Click a role / capability to inspect its skills, tools and sources.</div></div>'
-    + '</div>'
-    + '<div class="team-center" id="teamCenter"></div>';
-  document.body.appendChild(root);
-  // Self-managed visibility: close when any OTHER nav tab is clicked (capture phase).
-  document.addEventListener('click', e => {
-    const btn = e.target.closest && e.target.closest('[data-panel]');
-    if (btn && btn.dataset.panel !== 'team') _teamHide();
-  }, true);
-  window.addEventListener('resize', _teamReposition);
-}
-
-function _teamReposition(){
-  const root = document.getElementById('teamRoot'); if (!root || root.style.display === 'none') return;
-  const rail = document.querySelector('.rail');
-  const tb = document.querySelector('.app-titlebar');
-  const railShown = rail && rail.getBoundingClientRect().width > 0;
-  const top = tb ? Math.round(tb.getBoundingClientRect().bottom) : 0;
-  const left = railShown ? Math.round(rail.getBoundingClientRect().right) : 0;
-  root.style.left = left + 'px'; root.style.top = top + 'px'; root.style.right = '0'; root.style.bottom = '0';
-}
-
-async function teamOpen(){
-  _teamMount();
-  document.querySelectorAll('[data-panel]').forEach(t => t.classList.toggle('active', t.dataset.panel === 'team'));
-  const root = document.getElementById('teamRoot'); root.style.display = 'flex'; _teamReposition();
-  if (!_teamData){
-    try {
-      await _teamEnsureLibs();
-      const r = await fetch('/api/team', { headers: { 'Accept': 'application/json' } });
-      const raw = ((await r.json()) || {}).team || {};
-      _teamData = { roster: raw.roster ? jsyaml.load(raw.roster) : null, plugins: raw.plugins ? jsyaml.load(raw.plugins) : null, engines: raw.engines ? jsyaml.load(raw.engines) : null };
-    } catch(e){ document.getElementById('teamCenter').innerHTML = '<div style="padding:20px;color:#e05252;font-size:12px">Failed to load team: ' + _teamEsc(e && e.message) + '</div>'; return; }
-  }
+  const center = document.getElementById('teamCenter');
+  if (_teamData && !force){ _teamRender(); return; }
+  if (center) center.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">Loading team…</div>';
+  try {
+    await _teamEnsureLibs();
+    const r = await fetch('/api/team', { headers: { 'Accept': 'application/json' } });
+    const raw = ((await r.json()) || {}).team || {};
+    _teamData = { roster: raw.roster ? jsyaml.load(raw.roster) : null, plugins: raw.plugins ? jsyaml.load(raw.plugins) : null, engines: raw.engines ? jsyaml.load(raw.engines) : null };
+  } catch(e){ if (center) center.innerHTML = '<div style="padding:16px;color:#e05252;font-size:12px">Failed to load team: ' + _teamEsc(e && e.message) + '</div>'; return; }
   _teamView = _teamView || localStorage.getItem(_TEAM_VIEW_KEY) || 'graph';
   _teamRender();
 }
-function _teamHide(){ const root = document.getElementById('teamRoot'); if (root) root.style.display = 'none'; _teamStopLive(); }
 
 // ── data helpers ─────────────────────────────────────────────────────────────
 function _teamRoles(){ return (_teamData && _teamData.roster && _teamData.roster.roles) || []; }
@@ -153,19 +101,18 @@ function setTeamView(v){ _teamView = v; try { localStorage.setItem(_TEAM_VIEW_KE
 
 function _teamRender(){
   if (!_teamData) return;
-  const root = document.getElementById('teamRoot'); if (!root || root.style.display === 'none') return;
-  root.querySelectorAll('.tl-views button').forEach(b => b.classList.toggle('active', b.dataset.view === _teamView));
-  // left: stats + legend
-  const roles = _teamRoles(), divs = new Set(roles.map(r => r.division));
-  const core = roles.filter(r => r.tier === 'core').length;
-  const st = document.getElementById('teamStats'); if (st) st.textContent = `${(_teamData.roster && _teamData.roster.team) || 'team'} · ${roles.length} roles · ${divs.size} divisions · ${core} core / ${roles.length - core} optional`;
-  const lg = document.getElementById('teamLegend');
-  if (lg) lg.innerHTML = (_teamView === 'graph')
-    ? '<span><i style="background:' + _TEAM_AUTONOMY_COLOR.autonomous + '"></i>autonomous</span><span><i style="background:' + _TEAM_AUTONOMY_COLOR['hitl-assistant'] + '"></i>hitl</span><span>◇ brain-side</span><span>ring = live: <i style="background:#ffc233"></i>running <i style="background:#5b8def"></i>ready <i style="background:#e05252"></i>blocked</span>'
-    : '';
-  // center
+  [['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
+  // sidebar: stats + legend
+  const info = document.getElementById('teamInfo');
+  if (info){
+    const roles = _teamRoles(), divs = new Set(roles.map(r => r.division)), core = roles.filter(r => r.tier === 'core').length;
+    let h = `<div class="ti-stat"><b>${_teamEsc((_teamData.roster && _teamData.roster.team) || 'team')}</b> · ${roles.length} roles · ${divs.size} divisions · ${core} core / ${roles.length - core} optional</div>`;
+    if (_teamView === 'graph') h += '<div class="ti-legend"><span><i style="background:' + _TEAM_AUTONOMY_COLOR.autonomous + '"></i>autonomous</span><span><i style="background:' + _TEAM_AUTONOMY_COLOR['hitl-assistant'] + '"></i>hitl</span><span>◇ brain-side</span><span>ring=live: <i style="background:#ffc233"></i>run <i style="background:#5b8def"></i>ready <i style="background:#e05252"></i>blocked</span></div>';
+    info.innerHTML = h;
+  }
+  // main center
   _teamStopLive(); if (_teamCy){ try { _teamCy.destroy(); } catch(_){} _teamCy = null; }
-  const center = document.getElementById('teamCenter'); center.innerHTML = '';
+  const center = document.getElementById('teamCenter'); if (!center) return; center.innerHTML = '';
   if (_teamView === 'roster') _teamRenderRoster(center);
   else if (_teamView === 'reuse') _teamRenderReuse(center);
   else if (_teamView === 'calibrate') _teamRenderCalibrate(center);
@@ -175,18 +122,15 @@ function _teamRender(){
 
 function _teamRenderGraph(center){
   const host = document.createElement('div'); host.className = 'team-cy'; center.appendChild(host);
-  const nodes = [], edges = [];
+  const nodes = [], edges = [], seen = {};
   nodes.push({ data: { id: '__root', label: 'Founder ▸ CTO / Kanban', kind: 'root' } });
-  const seen = {};
   _teamRoles().forEach(r => {
     if (!seen[r.division]){ seen[r.division] = 1; nodes.push({ data: { id: 'div__' + r.division, label: r.division, kind: 'div', color: _TEAM_DIV_COLORS[r.division] || '#6b7280' } }); edges.push({ data: { id: 'e_root_' + r.division, source: '__root', target: 'div__' + r.division } }); }
     const hand = _teamField(r, 'hand'); const brain = (!hand || hand === 'none') ? 1 : 0;
     nodes.push({ data: { id: 'role__' + r.name, label: r.name, kind: 'role', role: r.name, color: _TEAM_AUTONOMY_COLOR[r.autonomy] || '#6b7280', tier: r.tier || 'optional', brain } });
     edges.push({ data: { id: 'e_' + r.division + '_' + r.name, source: 'div__' + r.division, target: 'role__' + r.name } });
   });
-  _teamCy = cytoscape({
-    container: host, elements: { nodes, edges },
-    style: [
+  _teamCy = cytoscape({ container: host, elements: { nodes, edges }, style: [
       { selector: 'node', style: { 'label': 'data(label)', 'font-size': 10, 'color': '#fff', 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': 96, 'width': 'label', 'height': 'label', 'padding': 8, 'shape': 'round-rectangle' } },
       { selector: 'node[kind="root"]', style: { 'background-color': '#111827', 'font-size': 12, 'font-weight': 'bold' } },
       { selector: 'node[kind="div"]', style: { 'background-color': 'data(color)', 'font-size': 11 } },
@@ -200,9 +144,7 @@ function _teamRenderGraph(center){
       { selector: 'node[kind="role"].lp', style: { 'border-width': 8 } },
       { selector: 'node.team-sel', style: { 'border-width': 4, 'border-color': '#0ea5e9' } },
     ],
-    layout: { name: window.cytoscape.__dagreRegistered ? 'dagre' : 'breadthfirst', rankDir: 'TB', nodeSep: 16, rankSep: 56, directed: true, padding: 18 },
-    wheelSensitivity: 0.2,
-  });
+    layout: { name: window.cytoscape.__dagreRegistered ? 'dagre' : 'breadthfirst', rankDir: 'TB', nodeSep: 16, rankSep: 56, directed: true, padding: 18 }, wheelSensitivity: 0.2 });
   _teamCy.on('tap', 'node[kind="role"]', evt => _teamSelectRole(evt.target.data('role')));
   if (_teamSel && _teamSel.role){ const n = _teamCy.getElementById('role__' + _teamSel.role); if (n) n.addClass('team-sel'); }
   _teamStartLive();
@@ -215,7 +157,7 @@ function _teamRenderRoster(center){
   _TEAM_DIV_ORDER.concat(Object.keys(byDiv).filter(d => !_TEAM_DIV_ORDER.includes(d))).forEach(div => {
     const rows = byDiv[div]; if (!rows) return;
     html += `<div class="team-div-h">${_teamEsc(div)}</div><table class="team-tbl"><thead><tr><th>role</th><th>tier</th><th>autonomy</th><th>hand</th><th>skills</th><th>does</th></tr></thead><tbody>`;
-    rows.sort((a,b)=>(a.tier!=='core')-(b.tier!=='core')||a.name.localeCompare(b.name)).forEach(r => { const h = _teamField(r,'hand'); html += `<tr class="team-row" onclick="_teamSelectRole('${_teamEsc(r.name)}')"><td><b>${_teamEsc(r.name)}</b></td><td>${_teamEsc(r.tier||'')}</td><td>${_teamEsc(r.autonomy||'')}</td><td>${_teamEsc((!h||h==='none')?'—':h)}</td><td>${(r.skills||[]).map(s=>'<span class="team-chip">'+_teamEsc(s)+'</span>').join('')}</td><td style="max-width:320px">${_teamEsc(r.does||'')}</td></tr>`; });
+    rows.sort((a,b)=>(a.tier!=='core')-(b.tier!=='core')||a.name.localeCompare(b.name)).forEach(r => { const h = _teamField(r,'hand'); html += `<tr class="team-row" onclick="_teamSelectRole('${_teamEsc(r.name)}')"><td><b>${_teamEsc(r.name)}</b></td><td>${_teamEsc(r.tier||'')}</td><td>${_teamEsc(r.autonomy||'')}</td><td>${_teamEsc((!h||h==='none')?'—':h)}</td><td>${(r.skills||[]).map(s=>'<span class="team-chip">'+_teamEsc(s)+'</span>').join('')}</td><td style="max-width:340px">${_teamEsc(r.does||'')}</td></tr>`; });
     html += '</tbody></table>';
   });
   wrap.innerHTML = html;
@@ -255,24 +197,20 @@ async function _teamRenderCalibrate(center){
   const pct = x => (x*100).toFixed(0) + '%';
   let html = '';
   if (summary.sample) html += '<div class="team-badge tb-official">SAMPLE (baseline keyword router) — run the eval for real numbers</div>';
-  html += `<div style="margin:8px 0;font-size:14px">Routing accuracy <b>${pct(correct/total)}</b> <span class="ts-sub">(${correct}/${total}) · ${_teamEsc(summary.engine||'promptfoo')} · ${_teamEsc(summary.generated||'')}</span></div>`;
+  html += `<div style="margin:8px 0;font-size:14px">Routing accuracy <b>${pct(correct/total)}</b> <span style="color:var(--muted)">(${correct}/${total}) · ${_teamEsc(summary.engine||'promptfoo')} · ${_teamEsc(summary.generated||'')}</span></div>`;
   html += '<div class="team-div-h">per-role</div><table class="team-tbl"><thead><tr><th>role</th><th>support</th><th>recall</th><th>precision</th><th>F1</th></tr></thead><tbody>';
   roles.map(role => { const rs = roles.reduce((s,a)=>s+conf[role][a],0), cs = roles.reduce((s,e)=>s+conf[e][role],0), tp = conf[role][role]; const rc = rs?tp/rs:0, pr = cs?tp/cs:0; return { role, s: rs, rc, pr, f1: (pr+rc)?2*pr*rc/(pr+rc):0 }; }).filter(m=>m.s>0).sort((a,b)=>a.f1-b.f1).forEach(m => { html += `<tr${m.f1<0.999?' style="color:#b45309"':''}><td><b>${_teamEsc(m.role)}</b></td><td>${m.s}</td><td>${pct(m.rc)}</td><td>${pct(m.pr)}</td><td>${pct(m.f1)}</td></tr>`; });
   html += '</tbody></table><div class="team-div-h" style="margin-top:14px">confusion (rows=expected, cols=routed)</div><div style="overflow:auto"><table class="team-tbl" style="font-size:11px"><thead><tr><th>exp ＼ got</th>' + roles.map(a=>`<th title="${_teamEsc(a)}">${_teamEsc(a.length>6?a.slice(0,6)+'…':a)}</th>`).join('') + '</tr></thead><tbody>';
   roles.forEach(e => { html += `<tr><td><b>${_teamEsc(e)}</b></td>` + roles.map(a => { const v = conf[e][a]; if (!v) return '<td></td>'; const bg = e===a?'background:#e7f6ec;color:#1f7a3f;font-weight:bold':'background:#fdecec;color:#b91c1c'; return `<td style="text-align:center;${bg}">${v}</td>`; }).join('') + '</tr>'; });
-  html += '</tbody></table></div><div class="ts-sub" style="margin-top:8px">Off-diagonal (red) = misroutes → role pairs to tighten in routing.md.</div>';
+  html += '</tbody></table></div><div style="color:var(--muted);font-size:12px;margin-top:8px">Off-diagonal (red) = misroutes → role pairs to tighten in routing.md.</div>';
   wrap.innerHTML = html;
 }
 
-// ── detail (left column) ─────────────────────────────────────────────────────
+// ── detail (sidebar #teamDetail) ─────────────────────────────────────────────
 function _teamSelectRole(name){ _teamSel = { role: name }; if (_teamCy){ _teamCy.nodes('.team-sel').removeClass('team-sel'); const n = _teamCy.getElementById('role__' + name); if (n) n.addClass('team-sel'); } _teamRenderDetail(); }
 function _teamSelectCapability(id){ _teamSel = { cap: id }; if (_teamCy) _teamCy.nodes('.team-sel').removeClass('team-sel'); _teamRenderDetail(); }
+function _teamRenderDetail(){ const el = document.getElementById('teamDetail'); if (!el || !_teamSel) return; if (_teamSel.role) _teamRenderRoleDetail(el, _teamSel.role); else if (_teamSel.cap) _teamRenderCapDetail(el, _teamSel.cap); }
 
-function _teamRenderDetail(){
-  const el = document.getElementById('teamDetail'); if (!el || !_teamSel) return;
-  if (_teamSel.role) return _teamRenderRoleDetail(el, _teamSel.role);
-  if (_teamSel.cap) return _teamRenderCapDetail(el, _teamSel.cap);
-}
 function _teamRenderRoleDetail(el, name){
   const r = _teamRole(name); if (!r) return;
   _teamBuildCaps(); const capByKey = _teamData.__capByKey;
