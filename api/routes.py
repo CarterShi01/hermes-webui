@@ -4721,6 +4721,22 @@ def _handle_team(handler, parsed) -> bool:
     return j(handler, {"team": out, "base": str(base)})
 
 
+def _handle_team_eval(handler, parsed) -> bool:
+    """Read-only: serve team/eval/eval-summary.json (the flat router hit-rate
+    produced offline by promptfoo + summarize.py) for the Team Calibrate view.
+    Returns {"summary": <parsed-or-null>}."""
+    from pathlib import Path as _Path
+    base = _Path(os.environ.get("OC_TEAM_DIR", "/one-creator/team"))
+    p = base / "eval" / "eval-summary.json"
+    summary = None
+    try:
+        if p.is_file():
+            summary = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        summary = None
+    return j(handler, {"summary": summary})
+
+
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
 
@@ -4867,6 +4883,8 @@ def handle_get(handler, parsed) -> bool:
     # ── Insights / knowledge status ──
     if parsed.path == "/api/team":
         return _handle_team(handler, parsed)
+    if parsed.path == "/api/team/eval":
+        return _handle_team_eval(handler, parsed)
     if parsed.path == "/api/insights":
         return _handle_insights(handler, parsed)
     if parsed.path == "/api/project-os/dashboard":

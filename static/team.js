@@ -127,13 +127,14 @@ function setTeamView(v){ _teamView = v; try { localStorage.setItem(_TEAM_VIEW_KE
 
 function _teamRender(){
   if (!_teamData) return;
-  [['teamGraphBtn','graph'],['teamRosterBtn','roster'],['teamReuseBtn','reuse']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
+  [['teamGraphBtn','graph'],['teamRosterBtn','roster'],['teamReuseBtn','reuse'],['teamCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
   const body = document.getElementById('teamBody'); if (!body) return;
   _teamStopLive();
   if (_teamCy){ try { _teamCy.destroy(); } catch(_){} _teamCy = null; }
   body.innerHTML = '';
   if (_teamView === 'roster') _teamRenderRoster(body);
   else if (_teamView === 'reuse') _teamRenderReuse(body);
+  else if (_teamView === 'calibrate') _teamRenderCalibrate(body);
   else _teamRenderGraph(body);
   if (_teamSelectedRole) _teamRenderSide(_teamSelectedRole);
 }
@@ -320,6 +321,64 @@ function _teamRenderGraph(body){
   _teamCy.on('tap', 'node[kind="role"]', evt => _teamSelectRole(evt.target.data('role')));
   if (_teamSelectedRole){ const n = _teamCy.getElementById('role__' + _teamSelectedRole); if (n) n.addClass('team-sel'); }
   _teamStartLive();
+}
+
+// ── Calibrate view (P4): render the router hit-rate produced by promptfoo (OSS).
+// We do NOT run the eval here — team/eval/ runs promptfoo offline and writes a flat
+// eval-summary.json (served read-only at /api/team/eval). The panel just computes
+// the confusion matrix + per-role precision/recall from the labeled rows (trivial
+// counting; no eval engine, no sklearn). ─────────────────────────────────────────
+async function _teamRenderCalibrate(body){
+  body.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">Loading eval…</div>';
+  let summary = null;
+  try { const r = await fetch('/api/team/eval', { headers: { 'Accept': 'application/json' } }); if (r.ok){ const j = await r.json(); summary = j && j.summary; } } catch(_){}
+  body.innerHTML = '';
+  const wrap = document.createElement('div'); wrap.className = 'team-roster'; body.appendChild(wrap);
+  const rows = (summary && summary.rows) || [];
+  if (!rows.length){
+    wrap.innerHTML = '<div style="padding:6px;font-size:12.5px;line-height:1.7">'
+      + '<b>No eval yet.</b> Routing hit-rate is computed by the open-source engine '
+      + '<a href="https://github.com/promptfoo/promptfoo" target="_blank" rel="noopener">promptfoo</a> '
+      + '(we only render its output — no custom eval engine).<br>Run in <code>team/eval/</code>:'
+      + '<pre style="background:var(--surface,#f3f4f6);padding:8px;border-radius:6px;overflow:auto">'
+      + 'npx promptfoo@latest eval -c promptfooconfig.yaml -o results.json\npython3 summarize.py results.json eval-summary.json</pre>'
+      + 'Then this view shows per-role precision/recall + a confusion matrix to calibrate <code>routing.md</code>.</div>';
+    return;
+  }
+  const roles = [...new Set(rows.flatMap(r => [r.expected, r.actual]).filter(Boolean))].sort();
+  const total = rows.length, correct = rows.filter(r => r.ok || r.expected === r.actual).length;
+  const conf = {}; roles.forEach(e => { conf[e] = {}; roles.forEach(a => conf[e][a] = 0); });
+  rows.forEach(r => { if (conf[r.expected] && conf[r.expected][r.actual] !== undefined) conf[r.expected][r.actual]++; });
+  const metrics = roles.map(role => {
+    const rowSum = roles.reduce((s,a) => s + conf[role][a], 0);   // support (expected = role)
+    const colSum = roles.reduce((s,e) => s + conf[e][role], 0);   // predicted = role
+    const tp = conf[role][role];
+    const recall = rowSum ? tp/rowSum : 0, precision = colSum ? tp/colSum : 0;
+    const f1 = (precision + recall) ? 2*precision*recall/(precision+recall) : 0;
+    return { role, support: rowSum, recall, precision, f1 };
+  }).filter(m => m.support > 0);
+  const pct = x => (x*100).toFixed(0) + '%';
+  let html = '';
+  if (summary.sample) html += '<div class="team-badge tb-official" style="font-size:11px">SAMPLE DATA (baseline keyword router) — run the eval in team/eval/ for real numbers</div>';
+  html += `<div style="margin:10px 0;font-size:14px">Routing accuracy: <b>${pct(correct/total)}</b> <span class="ts-sub">(${correct}/${total})</span> <span class="ts-sub">· engine: ${_teamEsc(summary.engine||'promptfoo')} · ${_teamEsc(summary.generated||'')}</span></div>`;
+  // per-role metrics
+  html += '<div class="team-div-h">per-role hit rate</div><table class="team-tbl"><thead><tr><th>role</th><th>support</th><th>recall</th><th>precision</th><th>F1</th></tr></thead><tbody>';
+  metrics.sort((a,b)=>a.f1-b.f1).forEach(m => { const warn = m.f1 < 0.999 ? ' style="color:#b45309"' : ''; html += `<tr${warn}><td><b>${_teamEsc(m.role)}</b></td><td>${m.support}</td><td>${pct(m.recall)}</td><td>${pct(m.precision)}</td><td>${pct(m.f1)}</td></tr>`; });
+  html += '</tbody></table>';
+  // confusion matrix
+  html += '<div class="team-div-h" style="margin-top:16px">confusion matrix (rows = expected, cols = routed)</div>';
+  html += '<div style="overflow:auto"><table class="team-tbl" style="font-size:11px"><thead><tr><th>exp ＼ got</th>' + roles.map(a=>`<th title="${_teamEsc(a)}">${_teamEsc(a.length>6?a.slice(0,6)+'…':a)}</th>`).join('') + '</tr></thead><tbody>';
+  roles.forEach(e => {
+    html += `<tr><td><b>${_teamEsc(e)}</b></td>` + roles.map(a => {
+      const v = conf[e][a]; if (!v) return '<td></td>';
+      const diag = e === a;
+      const bg = diag ? 'background:#e7f6ec;color:#1f7a3f;font-weight:bold' : 'background:#fdecec;color:#b91c1c';
+      return `<td style="text-align:center;${bg}">${v}</td>`;
+    }).join('') + '</tr>';
+  });
+  html += '</tbody></table></div>';
+  html += '<div class="ts-sub" style="margin-top:8px">Off-diagonal (red) = misroutes → the role pairs to tighten in routing.md / role SOULs.</div>';
+  wrap.innerHTML = html;
 }
 
 function _teamSelectRole(name){
