@@ -4702,6 +4702,25 @@ def _serve_manifest(handler) -> bool:
     return j(handler, {"error": "not found"}, status=404)
 
 
+def _handle_team(handler, parsed) -> bool:
+    """Read-only: serve the team-as-code source (team/*.yaml + routing.md) as raw
+    text so the WebUI Team panel can parse it client-side with js-yaml. The repo
+    stays the single source of truth; this endpoint never writes. Fixed filenames
+    only (no path params) → no traversal surface. Dir overridable via OC_TEAM_DIR."""
+    from pathlib import Path as _Path
+    base = _Path(os.environ.get("OC_TEAM_DIR", "/one-creator/team"))
+    files = {"roster": "roster.yaml", "plugins": "plugins.yaml",
+             "engines": "engines.yaml", "routing": "routing.md"}
+    out = {}
+    for key, fn in files.items():
+        p = base / fn
+        try:
+            out[key] = p.read_text(encoding="utf-8") if p.is_file() else None
+        except Exception:
+            out[key] = None
+    return j(handler, {"team": out, "base": str(base)})
+
+
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
 
@@ -4846,6 +4865,8 @@ def handle_get(handler, parsed) -> bool:
         return True
 
     # ── Insights / knowledge status ──
+    if parsed.path == "/api/team":
+        return _handle_team(handler, parsed)
     if parsed.path == "/api/insights":
         return _handle_insights(handler, parsed)
     if parsed.path == "/api/project-os/dashboard":
