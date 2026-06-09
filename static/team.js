@@ -23,6 +23,8 @@ const _TEAM_SELFBUILD_SKILLS = new Set(['writing-plans','write-adr-from-decision
 const _TEAM_DIV_COLORS = { leadership:'#b8860b', engineering:'#5b8def', product:'#0288a8', design:'#a855f7', data:'#3fa45b', domain:'#e0852e', 'gtm-marketing':'#e0529c', 'gtm-sales':'#d4a017', 'ops-finance':'#16a34a', 'ops-support':'#0ea5e9', strategy:'#6b7280' };
 const _TEAM_AUTONOMY_COLOR = { autonomous:'#3fa45b', 'hitl-assistant':'#b8860b', none:'#9aa0a6' };
 const _TEAM_DIV_ORDER = ['leadership','engineering','product','design','data','domain','gtm-marketing','gtm-sales','ops-finance','ops-support','strategy'];
+// Source badge class → node color (reuse graph hubs).
+const _TEAM_SRC_COLOR = { 'tb-native':'#3fa45b', 'tb-self':'#7c3aed', 'tb-oss':'#1a56db', 'tb-official':'#a8620b', 'tb-mcp':'#0a6e80', 'tb-shared':'#64748b' };
 
 function _teamEsc(s){ return (typeof esc === 'function') ? esc(s) : String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function _teamLoadScript(src){ return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.async = false; s.onload = () => res(); s.onerror = () => rej(new Error('failed to load ' + src)); document.head.appendChild(s); }); }
@@ -125,13 +127,87 @@ function setTeamView(v){ _teamView = v; try { localStorage.setItem(_TEAM_VIEW_KE
 
 function _teamRender(){
   if (!_teamData) return;
-  const gb = document.getElementById('teamGraphBtn'), rb = document.getElementById('teamRosterBtn');
-  if (gb) gb.classList.toggle('active', _teamView === 'graph');
-  if (rb) rb.classList.toggle('active', _teamView === 'roster');
+  [['teamGraphBtn','graph'],['teamRosterBtn','roster'],['teamReuseBtn','reuse']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
   const body = document.getElementById('teamBody'); if (!body) return;
+  if (_teamCy){ try { _teamCy.destroy(); } catch(_){} _teamCy = null; }
   body.innerHTML = '';
-  if (_teamView === 'roster') _teamRenderRoster(body); else _teamRenderGraph(body);
+  if (_teamView === 'roster') _teamRenderRoster(body);
+  else if (_teamView === 'reuse') _teamRenderReuse(body);
+  else _teamRenderGraph(body);
   if (_teamSelectedRole) _teamRenderSide(_teamSelectedRole);
+}
+
+// ── Capability index (skill / CC plugin / MCP) across all roles → drives the
+// Reuse bipartite view and the capability-detail drawer. Cached on _teamData. ──
+function _teamPluginRepo(entry){
+  const slash = entry.indexOf('/'); const mkt = slash >= 0 ? entry.slice(0, slash) : entry;
+  if (mkt === 'official') return 'https://github.com/anthropics/claude-plugins-official';
+  const m = (_teamData && _teamData.plugins && _teamData.plugins.marketplaces) || {};
+  const spec = m[mkt];
+  return (spec && spec.repo) ? ('https://github.com/' + spec.repo) : null;
+}
+function _teamBuildCaps(){
+  if (_teamData.__caps) return _teamData.__caps;
+  const map = new Map();
+  const get = (key, init) => { let c = map.get(key); if (!c){ c = Object.assign({ key, id: 'cap_' + map.size, roles: [] }, init); map.set(key, c); } return c; };
+  const add = (c, role) => { if (c.roles.indexOf(role) < 0) c.roles.push(role); };
+  _teamRoles().forEach(r => {
+    (r.skills || []).forEach(sk => add(get('skill:' + sk, { kind: 'skill', label: sk, source: _teamSkillBadge(sk), repo: null }), r.name));
+    (r.mcp || []).forEach(m => add(get('mcp:' + m, { kind: 'mcp', label: m, source: { cls: 'tb-mcp', label: 'MCP' }, repo: null, where: 'external/mcp/' + m }), r.name));
+    const { shared, role: own } = _teamPluginsFor(r.name);
+    shared.forEach(e => { const c = get('plugin:' + e, { kind: 'plugin', label: e, source: _teamPluginBadge(e), repo: _teamPluginRepo(e), shared: true }); c.shared = true; add(c, r.name); });
+    own.forEach(e => add(get('plugin:' + e, { kind: 'plugin', label: e, source: _teamPluginBadge(e), repo: _teamPluginRepo(e), shared: false }), r.name));
+  });
+  const caps = [...map.values()]; const byId = {}; caps.forEach(c => byId[c.id] = c);
+  _teamData.__caps = caps; _teamData.__capById = byId; _teamData.__capByKey = map; return caps;
+}
+
+function _teamRenderReuse(body){
+  const caps = _teamBuildCaps().filter(c => c.roles.length >= 2);
+  const host = document.createElement('div'); host.className = 'team-cy'; body.appendChild(host);
+  const note = document.createElement('div'); note.style.cssText = 'position:absolute;top:6px;left:10px;font-size:11px;color:var(--muted,#6b7280);z-index:2;pointer-events:none';
+  note.textContent = 'Shared capabilities reused by ≥2 roles — click a hub for detail'; body.appendChild(note);
+  if (!caps.length){ host.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:12px">No capability is shared by ≥2 roles yet.</div>'; return; }
+  const roleSet = new Set(); caps.forEach(c => c.roles.forEach(r => roleSet.add(r)));
+  const nodes = [], edges = [];
+  caps.forEach(c => {
+    nodes.push({ data: { id: c.id, label: c.label.replace(/^[^/]*\//, '') + ' ×' + c.roles.length, kind: 'cap', n: c.roles.length, color: _TEAM_SRC_COLOR[c.source.cls] || '#6b7280' } });
+    c.roles.forEach(rn => edges.push({ data: { id: c.id + '__' + rn, source: c.id, target: 'r__' + rn } }));
+  });
+  roleSet.forEach(rn => { const r = _teamRole(rn) || {}; nodes.push({ data: { id: 'r__' + rn, label: rn, kind: 'role', role: rn, color: _TEAM_AUTONOMY_COLOR[r.autonomy] || '#6b7280' } }); });
+  _teamCy = cytoscape({
+    container: host, elements: { nodes, edges },
+    style: [
+      { selector: 'node', style: { 'label': 'data(label)', 'font-size': 9, 'color': '#fff', 'text-valign': 'center', 'text-halign': 'center', 'text-wrap': 'wrap', 'text-max-width': 100, 'width': 'label', 'height': 'label', 'padding': 6, 'shape': 'round-rectangle' } },
+      { selector: 'node[kind="cap"]', style: { 'background-color': 'data(color)', 'font-weight': 'bold', 'padding': 9, 'border-width': 2, 'border-color': '#fff' } },
+      { selector: 'node[kind="role"]', style: { 'background-color': 'data(color)', 'font-size': 9 } },
+      { selector: 'edge', style: { 'width': 1, 'line-color': '#d1d5db', 'curve-style': 'haystack', 'haystack-radius': 0.4 } },
+      { selector: 'node.team-sel', style: { 'border-width': 4, 'border-color': '#0ea5e9' } },
+    ],
+    layout: { name: 'concentric', concentric: n => n.data('kind') === 'cap' ? 2 : 1, levelWidth: () => 1, minNodeSpacing: 16, padding: 24 },
+    wheelSensitivity: 0.2,
+  });
+  _teamCy.on('tap', 'node[kind="cap"]', e => _teamSelectCapability(e.target.id()));
+  _teamCy.on('tap', 'node[kind="role"]', e => _teamSelectRole(e.target.data('role')));
+}
+
+function _teamSelectCapability(id){
+  const c = (_teamData.__capById || {})[id]; const s = document.getElementById('teamSide'); if (!c || !s) return;
+  _teamSelectedRole = null; if (_teamCy) _teamCy.nodes('.team-sel').removeClass('team-sel');
+  const roles = [...new Set(c.roles)].sort();
+  const chips = roles.map(rn => `<span class="team-chip" style="cursor:pointer" onclick="_teamSelectRole('${_teamEsc(rn)}')">${_teamEsc(rn)}</span>`).join('');
+  let where = '<span class="ts-sub">—</span>';
+  if (c.repo) where = `<a href="${_teamEsc(c.repo)}" target="_blank" rel="noopener">${_teamEsc(c.repo.replace('https://github.com/', ''))}</a>`;
+  else if (c.where) where = _teamEsc(c.where);
+  else if (c.source.cls === 'tb-native') where = 'Hermes bundled skill';
+  else if (c.source.cls === 'tb-self') where = 'self-build (team/skills or docs)';
+  s.innerHTML = `<button class="ts-close" onclick="_teamCloseSide()" aria-label="Close">×</button>`
+    + `<h3>${_teamEsc(c.label)}</h3>`
+    + `<div class="ts-sub">${_teamEsc(c.kind)}${c.shared ? ' · shared layer' : ''}</div>`
+    + `<div class="ts-sec">source</div><div><span class="team-badge ${c.source.cls}">${_teamEsc(c.source.label)}</span></div>`
+    + `<div class="ts-sec">used by ${roles.length} role(s)</div><div>${chips}</div>`
+    + `<div class="ts-sec">where</div><div style="font-size:12px;word-break:break-all">${where}</div>`;
+  s.style.display = 'block';
 }
 
 function _teamRenderRoster(body){
@@ -206,15 +282,17 @@ function _teamRenderSide(name){
   const eng = (_teamData.engines && _teamData.engines.engines && _teamData.engines.engines[hand]) || null;
   const handLine = isBrain ? 'brain-side (no hand): kanban + memory'
     : (hand + (eng ? ` · ${eng.binary || ''}${eng.status ? ' ('+eng.status+')' : ''}` : ''));
+  _teamBuildCaps(); const capByKey = _teamData.__capByKey;
+  const clk = (key) => { const c = capByKey && capByKey.get(key); return c ? ` style="cursor:pointer" onclick="_teamSelectCapability('${c.id}')"` : ''; };
   const { shared, role: own } = _teamPluginsFor(name);
-  const skillBadges = (r.skills || []).map(sk => { const b = _teamSkillBadge(sk); return `<span class="team-badge ${b.cls}">${_teamEsc(b.label)}</span>`; }).join('') || '<span class="ts-sub">—</span>';
-  const pluginRow = (entry, isShared) => { const b = _teamPluginBadge(entry); return `<span class="team-badge ${b.cls}">${_teamEsc(b.label)}</span>${isShared ? '<span class="team-badge tb-shared">shared</span>' : ''}`; };
+  const skillBadges = (r.skills || []).map(sk => { const b = _teamSkillBadge(sk); return `<span class="team-badge ${b.cls}"${clk('skill:'+sk)}>${_teamEsc(b.label)}</span>`; }).join('') || '<span class="ts-sub">—</span>';
+  const pluginRow = (entry, isShared) => { const b = _teamPluginBadge(entry); return `<span class="team-badge ${b.cls}"${clk('plugin:'+entry)}>${_teamEsc(b.label)}</span>${isShared ? '<span class="team-badge tb-shared">shared</span>' : ''}`; };
   const sharedHtml = shared.length ? shared.map(e => pluginRow(e, true)).join('') : '';
   const ownHtml = own.length ? own.map(e => pluginRow(e, false)).join('') : '';
   const pluginsHtml = (isBrain) ? '<span class="ts-sub">brain-side role — no CC plugins</span>'
     : ((sharedHtml || ownHtml) ? (sharedHtml + ownHtml) : '<span class="ts-sub">base layer only</span>');
   const toolsets = (r.toolsets || []).map(x => `<span class="team-chip">${_teamEsc(x)}</span>`).join('') || '—';
-  const mcp = (r.mcp || []).map(x => `<span class="team-badge tb-mcp">${_teamEsc(x)} · MCP</span>`).join('') || '<span class="ts-sub">—</span>';
+  const mcp = (r.mcp || []).map(x => `<span class="team-badge tb-mcp"${clk('mcp:'+x)}>${_teamEsc(x)} · MCP</span>`).join('') || '<span class="ts-sub">—</span>';
   s.innerHTML = `<button class="ts-close" onclick="_teamCloseSide()" aria-label="Close">×</button>`
     + `<h3>${_teamEsc(r.name)}</h3>`
     + `<div class="ts-sub">${_teamEsc(r.division)} · ${_teamEsc(r.tier||'')} · ${_teamEsc(r.autonomy||'')}</div>`
