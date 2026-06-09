@@ -129,6 +129,7 @@ function _teamRender(){
   if (!_teamData) return;
   [['teamGraphBtn','graph'],['teamRosterBtn','roster'],['teamReuseBtn','reuse']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
   const body = document.getElementById('teamBody'); if (!body) return;
+  _teamStopLive();
   if (_teamCy){ try { _teamCy.destroy(); } catch(_){} _teamCy = null; }
   body.innerHTML = '';
   if (_teamView === 'roster') _teamRenderRoster(body);
@@ -161,6 +162,51 @@ function _teamBuildCaps(){
   const caps = [...map.values()]; const byId = {}; caps.forEach(c => byId[c.id] = c);
   _teamData.__caps = caps; _teamData.__capById = byId; _teamData.__capByKey = map; return caps;
 }
+
+// ── Live layer (P3): overlay current Kanban activity onto the org graph so roles
+// light up by what they're working on right now. Reads the same board the Kanban
+// panel uses (read-only). Self-polls while the graph view is active; stopped on
+// leaving the Team panel (panels.js) or switching to another Team view. ──────────
+let _teamLiveTimer = null, _teamPulseTimer = null, _teamPulseOn = false;
+
+async function _teamFetchBoard(){
+  try {
+    if (typeof api === 'function'){
+      const q = (typeof _kanbanBoardQuery === 'function') ? _kanbanBoardQuery() : '';
+      return await api('/api/kanban/board' + (q || ''));
+    }
+  } catch(_){}
+  return (typeof _kanbanBoard !== 'undefined' && _kanbanBoard) || null;
+}
+function _teamLiveByRole(board){
+  const m = {}; const cols = (board && board.columns) || [];
+  cols.forEach(col => (col.tasks || []).forEach(t => {
+    let a = t.assignee || ''; if (a[0] === '@') a = a.slice(1); if (!a) return;
+    const st = t.status || 'triage'; if (st === 'done' || st === 'archived') return;
+    const e = m[a] || (m[a] = { running: 0, blocked: 0, ready: 0, todo: 0, total: 0 });
+    if (st === 'running') e.running++; else if (st === 'blocked') e.blocked++; else if (st === 'ready') e.ready++; else e.todo++;
+    e.total++;
+  }));
+  return m;
+}
+async function _teamApplyLive(){
+  if (!_teamCy || _teamView !== 'graph') return;
+  const board = await _teamFetchBoard();
+  if (!_teamCy || _teamView !== 'graph') return;
+  const live = _teamLiveByRole(board || {});
+  _teamCy.batch(() => {
+    _teamRoles().forEach(r => {
+      const n = _teamCy.getElementById('role__' + r.name); if (!n || n.empty()) return;
+      const e = live[r.name];
+      const s = e ? (e.running ? 'running' : e.blocked ? 'blocked' : e.ready ? 'ready' : e.todo ? 'todo' : '') : '';
+      n.data('live', s);
+      n.data('label', r.name + (e && e.total ? '  ●' + e.total : ''));
+    });
+  });
+}
+function _teamPulseTick(){ if (!_teamCy || _teamView !== 'graph') return; _teamPulseOn = !_teamPulseOn; try { _teamCy.nodes('node[live="running"]').toggleClass('lp', _teamPulseOn); } catch(_){} }
+function _teamStartLive(){ _teamStopLive(); _teamApplyLive(); _teamLiveTimer = setInterval(_teamApplyLive, 9000); _teamPulseTimer = setInterval(_teamPulseTick, 600); }
+function _teamStopLive(){ if (_teamLiveTimer){ clearInterval(_teamLiveTimer); _teamLiveTimer = null; } if (_teamPulseTimer){ clearInterval(_teamPulseTimer); _teamPulseTimer = null; } }
 
 function _teamRenderReuse(body){
   const caps = _teamBuildCaps().filter(c => c.roles.length >= 2);
@@ -235,6 +281,8 @@ function _teamRenderRoster(body){
 
 function _teamRenderGraph(body){
   const host = document.createElement('div'); host.className = 'team-cy'; host.id = 'teamCyHost'; body.appendChild(host);
+  const note = document.createElement('div'); note.style.cssText = 'position:absolute;top:6px;left:10px;font-size:11px;color:var(--muted,#6b7280);z-index:2;pointer-events:none';
+  note.innerHTML = 'Live: role rings light up by current Kanban work — <span style="color:#ffc233">running</span> · <span style="color:#5b8def">ready</span> · <span style="color:#e05252">blocked</span>; ●N = active tasks'; body.appendChild(note);
   const nodes = [], edges = [];
   nodes.push({ data: { id: '__root', label: 'CTO ▸ Kanban', kind: 'root' } });
   const divs = {};
@@ -260,6 +308,10 @@ function _teamRenderGraph(body){
       { selector: 'node[brain=1]', style: { 'shape': 'round-diamond', 'border-width': 2, 'border-color': '#111827' } },
       { selector: 'node[tier="core"]', style: { 'border-width': 3, 'border-color': '#111827' } },
       { selector: 'edge', style: { 'width': 1.5, 'line-color': '#cbd5e1', 'target-arrow-color': '#cbd5e1', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier' } },
+      { selector: 'node[kind="role"][live="running"]', style: { 'border-width': 5, 'border-color': '#ffc233' } },
+      { selector: 'node[kind="role"][live="blocked"]', style: { 'border-width': 4, 'border-color': '#e05252' } },
+      { selector: 'node[kind="role"][live="ready"]',   style: { 'border-width': 4, 'border-color': '#5b8def' } },
+      { selector: 'node[kind="role"].lp', style: { 'border-width': 8 } },
       { selector: 'node.team-sel', style: { 'border-width': 4, 'border-color': '#0ea5e9' } },
     ],
     layout: { name: window.cytoscape && window.cytoscape.__dagreRegistered ? 'dagre' : 'breadthfirst', rankDir: 'TB', nodeSep: 14, rankSep: 48, directed: true, padding: 16 },
@@ -267,6 +319,7 @@ function _teamRenderGraph(body){
   });
   _teamCy.on('tap', 'node[kind="role"]', evt => _teamSelectRole(evt.target.data('role')));
   if (_teamSelectedRole){ const n = _teamCy.getElementById('role__' + _teamSelectedRole); if (n) n.addClass('team-sel'); }
+  _teamStartLive();
 }
 
 function _teamSelectRole(name){

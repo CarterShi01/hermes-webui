@@ -232,6 +232,10 @@ async function switchPanel(name, opts = {}) {
   if (prevPanel === 'kanban' && nextPanel !== 'kanban') {
     if (typeof _kanbanStopPolling === 'function') _kanbanStopPolling();
   }
+  // Stop the Team panel's live Kanban overlay poll when leaving Team.
+  if (prevPanel === 'team' && nextPanel !== 'team') {
+    if (typeof _teamStopLive === 'function') _teamStopLive();
+  }
   _currentPanel = nextPanel;
   // Update nav tabs (rail + mobile sidebar-nav share data-panel)
   document.querySelectorAll('[data-panel]').forEach(t => t.classList.toggle('active', t.dataset.panel === nextPanel));
