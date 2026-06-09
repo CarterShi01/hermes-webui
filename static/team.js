@@ -35,6 +35,10 @@ async function _teamEnsureLibs(){
 function _teamInjectStyle(){
   if (_teamStyled) return; _teamStyled = true;
   const css = `
+  #mainTeam .team-view-toggle{display:inline-flex;gap:4px;flex-wrap:wrap}
+  #mainTeam .team-view-btn{width:auto;height:auto;padding:4px 12px;font-size:12px;line-height:1.4;border:1px solid var(--border,#e5e7eb);border-radius:6px;background:var(--bg,#fff);color:var(--muted,#6b7280);cursor:pointer;white-space:nowrap}
+  #mainTeam .team-view-btn:hover{background:var(--surface,#f3f4f6)}
+  #mainTeam .team-view-btn.active{background:var(--accent,#5b8def);color:#fff;border-color:transparent}
   #teamCenter .team-cy{position:absolute;inset:0}
   #teamCenter .team-scroll{position:absolute;inset:0;overflow:auto;padding:10px 14px}
   #teamCenter .team-note{position:absolute;top:6px;left:12px;font-size:11px;color:var(--muted,#6b7280);z-index:2;pointer-events:none;background:var(--main-bg,#fff);padding:0 4px;border-radius:4px}
@@ -147,6 +151,7 @@ function _teamRenderGraph(center){
     layout: { name: window.cytoscape.__dagreRegistered ? 'dagre' : 'breadthfirst', rankDir: 'TB', nodeSep: 16, rankSep: 56, directed: true, padding: 18 }, wheelSensitivity: 0.2 });
   _teamCy.on('tap', 'node[kind="role"]', evt => _teamSelectRole(evt.target.data('role')));
   if (_teamSel && _teamSel.role){ const n = _teamCy.getElementById('role__' + _teamSel.role); if (n) n.addClass('team-sel'); }
+  setTimeout(() => { try { _teamCy && _teamCy.resize(); _teamCy && _teamCy.fit(undefined, 24); } catch(_){} }, 60);
   _teamStartLive();
 }
 
@@ -181,6 +186,7 @@ function _teamRenderReuse(center){
     layout: { name: 'concentric', concentric: n => n.data('kind') === 'cap' ? 2 : 1, levelWidth: () => 1, minNodeSpacing: 16, padding: 24 }, wheelSensitivity: 0.2 });
   _teamCy.on('tap', 'node[kind="cap"]', e => _teamSelectCapability(e.target.id()));
   _teamCy.on('tap', 'node[kind="role"]', e => _teamSelectRole(e.target.data('role')));
+  setTimeout(() => { try { _teamCy && _teamCy.resize(); _teamCy && _teamCy.fit(undefined, 24); } catch(_){} }, 60);
 }
 
 async function _teamRenderCalibrate(center){
