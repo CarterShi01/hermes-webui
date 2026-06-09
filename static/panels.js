@@ -232,10 +232,6 @@ async function switchPanel(name, opts = {}) {
   if (prevPanel === 'kanban' && nextPanel !== 'kanban') {
     if (typeof _kanbanStopPolling === 'function') _kanbanStopPolling();
   }
-  // Stop the Team panel's live Kanban overlay poll when leaving Team.
-  if (prevPanel === 'team' && nextPanel !== 'team') {
-    if (typeof _teamStopLive === 'function') _teamStopLive();
-  }
   _currentPanel = nextPanel;
   // Update nav tabs (rail + mobile sidebar-nav share data-panel)
   document.querySelectorAll('[data-panel]').forEach(t => t.classList.toggle('active', t.dataset.panel === nextPanel));
@@ -249,7 +245,7 @@ async function switchPanel(name, opts = {}) {
   // showing-<name> class on <main>; no class means chat (the default).
   const mainEl = document.querySelector('main.main');
   if (mainEl) {
-    ['settings','skills','memory','team','tasks','kanban','workspaces','profiles','insights','logs','plugin'].forEach(p => {
+    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','plugin'].forEach(p => {
       mainEl.classList.toggle('showing-' + p, nextPanel === p);
     });
   }
@@ -258,7 +254,6 @@ async function switchPanel(name, opts = {}) {
   if (nextPanel === 'kanban') await loadKanban();
   if (nextPanel === 'skills') await loadSkills();
   if (nextPanel === 'memory') await loadMemory();
-  if (nextPanel === 'team') await loadTeamPanel();
   if (nextPanel === 'workspaces') await loadWorkspacesPanel();
   if (nextPanel === 'profiles') await loadProfilesPanel();
   if (nextPanel === 'todos') loadTodos();
@@ -5903,7 +5898,7 @@ function switchSettingsSection(name){
     _currentPanel = 'settings';
     var mainEl = document.querySelector('main.main');
     if (mainEl) {
-      ['settings','skills','memory','team','tasks','kanban','workspaces','profiles','insights','logs','plugin'].forEach(function(p) {
+      ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','plugin'].forEach(function(p) {
         mainEl.classList.toggle('showing-' + p, p === 'settings');
       });
     }
@@ -6813,7 +6808,7 @@ async function switchPluginPage(event, path, label) {
   _currentPanel = 'plugin';
   const mainEl = document.querySelector('main.main');
   if (mainEl) {
-    ['settings','skills','memory','team','tasks','kanban','workspaces','profiles','insights','logs','plugin'].forEach(p => {
+    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','plugin'].forEach(p => {
       mainEl.classList.toggle('showing-' + p, p === 'plugin');
     });
   }
