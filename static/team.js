@@ -41,11 +41,11 @@ function _teamInjectStyle(){
   #mainTeam .team-view-btn.active{background:var(--accent,#5b8def);color:#fff;border-color:transparent}
   #teamCenter .team-cy{position:absolute;inset:0}
   #teamCenter .team-scroll{position:absolute;inset:0;overflow:auto;padding:10px 14px}
-  #teamCenter .team-matrix{border-collapse:separate;border-spacing:0;font-size:12.5px}
+  #teamCenter .team-matrix{border-collapse:separate;border-spacing:0;font-size:13.5px}
   #teamCenter .team-matrix th,#teamCenter .team-matrix td{border-bottom:1px solid var(--border,#eee);border-right:1px solid var(--border,#eee)}
   #teamCenter .team-matrix thead th{position:sticky;top:0;z-index:3;background:var(--bg,#fff);vertical-align:bottom;padding:4px 0}
   #teamCenter .team-matrix .tm-rolehead{cursor:pointer}
-  #teamCenter .team-matrix .tm-rolehead span{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;font-weight:500;font-size:12px;color:var(--muted,#6b7280);display:inline-block;padding:6px 2px}
+  #teamCenter .team-matrix .tm-rolehead span{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;font-weight:500;font-size:13.5px;color:var(--muted,#6b7280);display:inline-block;padding:6px 2px}
   #teamCenter .team-matrix .tm-corner{position:sticky;left:0;top:0;z-index:4;background:var(--bg,#fff);text-align:left;color:var(--muted,#6b7280);min-width:170px;vertical-align:bottom;padding:4px 8px;font-weight:500}
   #teamCenter .team-matrix .tm-cap{position:sticky;left:0;z-index:2;background:var(--bg,#fff);cursor:pointer;white-space:nowrap;max-width:230px;overflow:hidden;text-overflow:ellipsis;padding:5px 10px}
   #teamCenter .team-matrix .tm-cap:hover{background:var(--surface,#f3f4f6)}
