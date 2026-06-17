@@ -21,9 +21,10 @@ def _base() -> Path:
 
 def _team(handler) -> None:
     base = _base()
-    # ADR 0015: catalogs moved under catalog/, docs under docs/. Keys stay the same so team.js is unaffected.
-    files = {"roster": "roster.yaml", "plugins": "catalog/plugins.yaml",
-             "engines": "catalog/engines.yaml", "routing": "docs/routing.md"}
+    # ADR 0016: catalog/ dissolved — plugins/engines moved under bridge/ (OC's external-execution layer);
+    # docs under docs/. Keys stay the same so team.js is unaffected.
+    files = {"roster": "roster.yaml", "plugins": "bridge/plugins.yaml",
+             "engines": "bridge/engines.yaml", "routing": "docs/routing.md"}
     out = {}
     for key, fn in files.items():
         p = base / fn
