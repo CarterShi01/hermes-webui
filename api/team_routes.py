@@ -23,15 +23,25 @@ def _team(handler) -> None:
     base = _base()
     # ADR 0016: catalog/ dissolved — plugins/engines moved under bridge/ (OC's external-execution layer);
     # docs under docs/. Keys stay the same so team.js is unaffected.
-    files = {"roster": "roster.yaml", "plugins": "bridge/plugins.yaml",
-             "engines": "bridge/engines.yaml", "routing": "docs/routing.md"}
+    # ADR 0034: the v2 roster nests fields under labels/descriptor/bind; static/team.js reads
+    # v1-flat fields (r.division/r.tier/r.hand/r.does/...). Serve the role_view-resolved v1-flat
+    # roster (team/.gen/roster.v1.json, written by team/scripts/gen-roster-view.py at install-team
+    # time) so the WebUI never re-implements the v2 selector-binding engine in JS. Fall back to the
+    # raw roster.yaml if the gen artifact is absent (fresh checkout before install-team).
+    files = {"roster": [".gen/roster.v1.json", "roster.yaml"],
+             "plugins": ["bridge/plugins.yaml"], "engines": ["bridge/engines.yaml"],
+             "routing": ["docs/routing.md"]}
     out = {}
-    for key, fn in files.items():
-        p = base / fn
-        try:
-            out[key] = p.read_text(encoding="utf-8") if p.is_file() else None
-        except Exception:
-            out[key] = None
+    for key, cands in files.items():
+        out[key] = None
+        for fn in cands:
+            p = base / fn
+            if p.is_file():
+                try:
+                    out[key] = p.read_text(encoding="utf-8")
+                except Exception:
+                    out[key] = None
+                break
     j(handler, {"team": out, "base": str(base)})
 
 
