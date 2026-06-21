@@ -474,17 +474,17 @@ async function _teamRenderHealth(center){
       + (c.note ? `<div class="ts-sub" style="font-size:11.5px">来自:${_teamEsc(c.note)}</div>` : '')
       + `<details style="margin:4px 0"><summary style="cursor:pointer;font-size:11.5px;color:var(--muted)">看全文(自己判断好不好)</summary>`
       + `<pre style="white-space:pre-wrap;font-size:11px;background:var(--surface,#f8fafc);padding:6px;border-radius:6px;max-height:260px;overflow:auto;margin:4px 0 0">${_teamEsc(c.content||'(读不到内容)')}</pre></details>`
-      // ── 操作入口:Promote ▸ 填 scope → 拼命令 → 复制(门户只读,你回 CC 跑)──
+      // ── 操作入口:Promote ▸ 填 scope → 拼一段给 agent-ops 的指令 → 复制 → 去聊天,它来做 ──
       + `<button onclick="_teamPromoteToggle('${sk}')" style="font-size:11.5px;padding:3px 11px;margin-top:5px;cursor:pointer;border:1px solid var(--accent,#5b8def);color:var(--accent,#5b8def);border-radius:5px;background:var(--bg,#fff)">Promote ▸ 填 scope</button>`
       + `<div id="pf-${sk}" data-role="${ro}" style="display:none;margin-top:7px;padding:8px 10px;background:var(--surface,#f8fafc);border-radius:6px;font-size:11.5px">`
       + fld('给谁用 division', `<select id="pf-div-${sk}" oninput="_teamPromoteShow('${ro}','${sk}')" style="font-size:11.5px;padding:2px 6px">${divOpts}</select>`)
       + fld('平台 hand', `<input id="pf-hand-${sk}" value="*" oninput="_teamPromoteShow('${ro}','${sk}')" style="font-size:11.5px;padding:2px 6px;width:130px"> <span class="tm-x">* = 所有手</span>`)
       + fld('项目 project', `<input id="pf-proj-${sk}" value="*" oninput="_teamPromoteShow('${ro}','${sk}')" style="font-size:11.5px;padding:2px 6px;width:130px"> <span class="tm-x">* = 所有项目</span>`)
-      + `<div style="display:flex;gap:6px;align-items:center;margin-top:6px">`
-      + `<code id="pf-out-${sk}" style="font-size:11px;background:var(--bg,#fff);padding:3px 7px;border-radius:5px;flex:1;overflow:auto;white-space:nowrap"></code>`
-      + `<button onclick="_teamPromoteCopy('${ro}','${sk}')" style="font-size:11px;padding:3px 11px;cursor:pointer;border:1px solid var(--border,#e5e7eb);border-radius:5px;background:var(--bg,#fff)">复制</button>`
+      + `<div style="margin-top:6px;font-size:10.5px;color:var(--muted)">复制下面这段 → 去和 <b>agent-ops</b> 聊(<code>agent-ops chat</code> 或团队治理面),它会在 chat 里 promote + commit + install 分发,你不用碰命令行:</div>`
+      + `<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px">`
+      + `<div id="pf-out-${sk}" style="font-size:11px;background:var(--bg,#fff);padding:5px 8px;border-radius:5px;flex:1;line-height:1.5;border:1px solid var(--border,#eee)"></div>`
+      + `<button onclick="_teamPromoteCopy('${ro}','${sk}')" style="font-size:11px;padding:3px 11px;cursor:pointer;border:1px solid var(--accent,#5b8def);color:#fff;background:var(--accent,#5b8def);border-radius:5px;white-space:nowrap">复制给 agent-ops</button>`
       + `</div>`
-      + `<div class="ts-sub" style="font-size:10.5px;margin-top:4px">复制到你的 CC 会话跑 → 写进 team/skills + resources.yaml → 顺手 <code>git commit</code> + <code>bash team/scripts/install-team.sh</code> 分发。门户只读,不替你写真相源。</div>`
       + `</div>`
       + `</div>`;
   });
@@ -579,27 +579,33 @@ function _teamPulseTick(){ if (!_teamCy || _teamView !== 'graph') return; _teamP
 function _teamStartLive(){ _teamStopLive(); _teamApplyLive(); _teamLiveTimer = setInterval(_teamApplyLive, 9000); _teamPulseTimer = setInterval(_teamPulseTick, 600); }
 function _teamStopLive(){ if (_teamLiveTimer){ clearInterval(_teamLiveTimer); _teamLiveTimer = null; } if (_teamPulseTimer){ clearInterval(_teamPulseTimer); _teamPulseTimer = null; } }
 
-// ── Promote 操作入口(门户只读:填 scope → 拼命令 → 复制,你回 CC 跑)──
+// ── Promote 操作入口(门户只读:填 scope → 拼一段给 agent-ops 的指令 → 复制 → 去聊天,
+//    agent-ops 在 chat 里把 promote + commit + install 都做掉,你不碰命令行)──
 function _teamPromoteToggle(skill){
   const f = document.getElementById('pf-' + skill); if (!f) return;
   const open = f.style.display === 'none'; f.style.display = open ? 'block' : 'none';
   if (open) _teamPromoteShow(f.getAttribute('data-role'), skill);
 }
-function _teamPromoteCmd(role, skill){
+function _teamPromotePrompt(role, skill){
   const v = id => { const e = document.getElementById(id); return e ? (e.value || '') : ''; };
   const div = v('pf-div-' + skill).trim();
   const hand = (v('pf-hand-' + skill).trim() || '*');
   const proj = (v('pf-proj-' + skill).trim() || '*');
-  let cmd = `python3 team/learn/promote-learned.py --role ${role} --skill ${skill}`;
-  if (div) cmd += ` --division ${div}`;
-  if (hand && hand !== '*') cmd += ` --hand '${hand}'`;
-  if (proj && proj !== '*') cmd += ` --project ${proj}`;
-  return cmd;
+  let scope = div ? ('给 ' + div + ' division 用') : '按默认 division';
+  if (hand && hand !== '*') scope += '、hand=' + hand;
+  if (proj && proj !== '*') scope += '、项目 ' + proj;
+  let flags = '--role ' + role + ' --skill ' + skill;
+  if (div) flags += ' --division ' + div;
+  if (hand && hand !== '*') flags += " --hand '" + hand + "'";
+  if (proj && proj !== '*') flags += ' --project ' + proj;
+  return '请把候选 skill ' + skill + '(' + role + ' 角色自学的)promote 进 team 资源中心,' + scope
+    + '。执行 python3 team/learn/promote-learned.py ' + flags
+    + ',成功后 git commit 改动并 bash team/scripts/install-team.sh 分发;做完把结果告诉我。';
 }
-function _teamPromoteShow(role, skill){ const o = document.getElementById('pf-out-' + skill); if (o) o.textContent = _teamPromoteCmd(role, skill); }
+function _teamPromoteShow(role, skill){ const o = document.getElementById('pf-out-' + skill); if (o) o.textContent = _teamPromotePrompt(role, skill); }
 function _teamPromoteCopy(role, skill){
-  const cmd = _teamPromoteCmd(role, skill); _teamPromoteShow(role, skill);
-  try { navigator.clipboard && navigator.clipboard.writeText(cmd); } catch(_){}
+  const txt = _teamPromotePrompt(role, skill); _teamPromoteShow(role, skill);
+  try { navigator.clipboard && navigator.clipboard.writeText(txt); } catch(_){}
   const o = document.getElementById('pf-out-' + skill);
   if (o){ const bg = o.style.background; o.style.background = '#dcfce7'; setTimeout(() => { o.style.background = bg; }, 700); }
 }
