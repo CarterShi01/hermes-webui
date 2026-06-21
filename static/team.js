@@ -136,7 +136,7 @@ function setTeamView(v){ _teamView = v; try { localStorage.setItem(_TEAM_VIEW_KE
 
 function _teamRender(){
   if (!_teamData) return;
-  [['teamViewCatalogBtn','catalog'],['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewPipelineBtn','pipeline'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
+  [['teamViewCatalogBtn','catalog'],['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewPipelineBtn','pipeline'],['teamViewPlanesBtn','planes'],['teamViewHealthBtn','health'],['teamViewSourcesBtn','sources'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
   // sidebar: stats + legend
   const info = document.getElementById('teamInfo');
   if (info){
@@ -152,6 +152,9 @@ function _teamRender(){
   else if (_teamView === 'roster') _teamRenderRoster(center);
   else if (_teamView === 'reuse') _teamRenderReuse(center);
   else if (_teamView === 'pipeline') _teamRenderPipeline(center);
+  else if (_teamView === 'planes') _teamRenderPlanes(center);
+  else if (_teamView === 'health') _teamRenderHealth(center);
+  else if (_teamView === 'sources') _teamRenderSources(center);
   else if (_teamView === 'calibrate') _teamRenderCalibrate(center);
   else _teamRenderGraph(center);
   _teamRenderDetail();
@@ -358,6 +361,57 @@ function _teamCatFill(){
     html += `<tr class="team-row" onclick="_teamSelectResource('${_teamEsc(r.name)}','${_teamEsc(r.kind)}')"><td><b>${_teamEsc(r.name)}</b></td><td><span class="team-badge ${kb}">${_teamEsc(r.kind)}</span></td><td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${src}</td><td>${r.consumer_count||0}</td><td>${health||'<span class="tm-x">ok</span>'}</td></tr>`;
   });
   body.innerHTML = html + '</tbody></table>';
+}
+
+// ── Planes & Lifecycle (L5) — team as resource manager: entry planes + agent-ops
+// lifecycle stations with their ecosystem glue (wired? cross-checked in gen). ────
+function _teamResKind(name){ const r = ((_teamPortal&&_teamPortal.resources)||[]).find(x=>x.name===name); return r ? r.kind : 'cli'; }
+function _teamWiredBadge(b){ return b===null ? '<span class="tm-x">—</span>' : (b ? '<span class="team-badge tb-native">wired</span>' : '<span class="team-badge th-orphan">missing</span>'); }
+async function _teamRenderPlanes(center){
+  const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
+  const p = await _teamEnsurePortal(); if (!p){ wrap.innerHTML = '<div style="padding:8px;font-size:12px">No portal data.</div>'; return; }
+  let h = '<div class="team-div-h">操作面 planes — team(资源管理器)的入口面 ↔ 对齐 profile</div>';
+  h += '<table class="team-tbl"><thead><tr><th>plane</th><th>对齐 profile</th><th>入口</th><th>做什么</th></tr></thead><tbody>';
+  (p.planes||[]).forEach(pl => { const prof = pl.profile ? `<b class="team-row" style="cursor:pointer" onclick="_teamSelectRole('${_teamEsc(pl.profile)}')">${_teamEsc(pl.profile)}</b> ${_teamWiredBadge(pl.profile_exists)}` : '<span class="tm-x">—(本地投影,无 profile)</span>'; h += `<tr><td><b>${_teamEsc(pl.plane)}</b></td><td>${prof}</td><td><code>${_teamEsc(pl.entry)}</code></td><td style="max-width:340px">${_teamEsc(pl.does)}</td></tr>`; });
+  h += '</tbody></table>';
+  h += '<div class="team-div-h" style="margin-top:16px">agent-ops 生命周期 9 站 — 每站接的生态 glue</div>';
+  h += '<table class="team-tbl"><thead><tr><th>站</th><th>glue 工具</th><th>已接</th></tr></thead><tbody>';
+  (p.lifecycle||[]).forEach(l => { const tool = l.tool ? `<span class="team-row" style="cursor:pointer" onclick="_teamSelectResource('${_teamEsc(l.tool)}','${_teamEsc(_teamResKind(l.tool))}')">${_teamEsc(l.tool)}</span>` : '<span class="tm-x">原生 / 对话</span>'; h += `<tr><td>${_teamEsc(l.station)}</td><td>${tool}</td><td>${_teamWiredBadge(l.tool_exists)}</td></tr>`; });
+  h += '</tbody></table>';
+  wrap.innerHTML = h;
+}
+
+// ── Health / Stewardship (L6) — static governance signals (orphan/no-desc/dup/
+// thin roles). Dynamic 0-dispatch needs live board (checkup --usage at runtime). ─
+async function _teamRenderHealth(center){
+  const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
+  const p = await _teamEnsurePortal(); if (!p){ wrap.innerHTML = '<div style="padding:8px;font-size:12px">No portal data.</div>'; return; }
+  const H = p.health || {};
+  const resChip = n => `<span class="team-chip" style="cursor:pointer" onclick="_teamSelectResource('${_teamEsc(n)}','${_teamEsc(_teamResKind(n))}')">${_teamEsc(n)}</span>`;
+  const card = (title, items, render, empty) => `<div class="team-div-h">${_teamEsc(title)} · ${items.length}</div>` + (items.length ? ('<div>' + items.map(render).join('') + '</div>') : `<div class="ts-sub" style="padding:1px 0 4px">${empty}</div>`);
+  let h = '<div style="font-size:12.5px;margin:2px 0 8px;color:var(--muted)">静态治理信号(读 portal)。动态「0 派工角色」需 live board → 运行时 <code>checkup --usage</code>。每条带 STEWARDSHIP 动作。</div>';
+  h += card('orphan 资源(无角色消费 → 解 binding 或下线)', H.orphans||[], resChip, '✓ 无孤儿');
+  h += card('缺 does 描述(equip 推荐失准 → 补描述)', H.no_desc||[], resChip, '✓ 资源都有描述');
+  h += card('描述重复(潜在可合并)', H.dup_desc||[], resChip, '✓ 无重复描述');
+  h += card('执行角色 description 偏薄(<28 字,易混淆 → sharpen 或合并)', H.thin_roles||[], r => `<span class="team-chip" style="cursor:pointer" onclick="_teamSelectRole('${_teamEsc(r.name)}')">${_teamEsc(r.name)} <span class="tm-x">${r.len}字</span></span>`, '✓ 描述都够厚');
+  wrap.innerHTML = h;
+}
+
+// ── Sources / Supply chain (L7) — resources grouped by marketplace + provenance. ─
+async function _teamRenderSources(center){
+  const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
+  const p = await _teamEnsurePortal(); if (!p){ wrap.innerHTML = '<div style="padding:8px;font-size:12px">No portal data.</div>'; return; }
+  const mk = p.marketplaces || {}, byMk = {};
+  (p.resources||[]).forEach(r => { const key = r.marketplace || '·self / native'; (byMk[key] = byMk[key] || []).push(r); });
+  const keys = Object.keys(byMk).sort((a,b)=> byMk[b].length - byMk[a].length || a.localeCompare(b));
+  let h = '<div style="font-size:12.5px;margin:2px 0 8px;color:var(--muted)">供应链:资源按来源分组。external=marketplace 抄来 / self=自建本地。点资源看 provenance + dependents。</div>';
+  keys.forEach(k => {
+    const spec = mk[k], repo = spec && spec.repo ? 'https://github.com/'+spec.repo : null;
+    h += `<div class="team-div-h">${_teamEsc(k)} · ${byMk[k].length}${repo?` · <a href="${_teamEsc(repo)}" target="_blank" rel="noopener" style="text-transform:none">${_teamEsc(spec.repo)}</a>`:''}</div><div>`;
+    byMk[k].sort((a,b)=>(b.consumer_count||0)-(a.consumer_count||0)||a.name.localeCompare(b.name)).forEach(r => { const kb = _TEAM_KIND_BADGE[r.kind]||'tb-shared'; h += `<span class="team-chip" style="cursor:pointer" onclick="_teamSelectResource('${_teamEsc(r.name)}','${_teamEsc(r.kind)}')"><span class="team-badge ${kb}" style="margin:0 4px 0 0">${_teamEsc(r.kind)}</span>${_teamEsc(r.name.replace(/^[^/]*\//,''))} <span class="tm-x">×${r.consumer_count||0}</span></span>`; });
+    h += '</div>';
+  });
+  wrap.innerHTML = h;
 }
 
 // ── detail (sidebar #teamDetail) ─────────────────────────────────────────────
