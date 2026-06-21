@@ -457,22 +457,35 @@ async function _teamRenderHealth(center){
   let h = '<div style="font-size:12.5px;margin:2px 0 8px;color:var(--muted)">静态治理信号(读 portal)。动态「0 派工角色」需 live board → 运行时 <code>checkup --usage</code>。每条带 STEWARDSHIP 动作。</div>';
   // ── 待 promote 的候选 skill(Line B 机器自学的;看顺眼就人工搬进资源中心)— 放最上,最 actionable ──
   const cands = p.candidates || [];
+  const _divs = [...new Set((p.roles||[]).map(r => r.division).filter(Boolean))].sort();
   h += `<div class="team-div-h" style="color:#b45309">⬆ 待 promote 的候选 skill · ${cands.length}</div>`;
   if (!cands.length) h += '<div class="ts-sub" style="padding:1px 0 4px">✓ 暂无候选(每周 Hermes 从你的上报里自学;有了会在这评审)</div>';
   cands.forEach(c => {
     const sim = (c.similar_declared && c.similar_declared.length)
       ? `<span class="team-badge th-warn" title="资源中心已有名字相近的,注意别重复 promote">⚠ 近似已有:${c.similar_declared.map(_teamEsc).join(', ')}</span>` : '';
-    const cmd = _teamEsc(c.promote_cmd || '');
+    const sk = _teamEsc(c.skill), ro = _teamEsc(c.role);
+    const cdiv = ((p.roles||[]).find(r => r.name === c.role) || {}).division || _divs[0] || 'engineering';
+    const divOpts = _divs.map(d => `<option value="${_teamEsc(d)}"${d===cdiv?' selected':''}>${_teamEsc(d)}</option>`).join('')
+      + (_divs.includes(cdiv) ? '' : `<option value="${_teamEsc(cdiv)}" selected>${_teamEsc(cdiv)}</option>`);
+    const fld = (lbl, inner) => `<div style="margin:3px 0"><span style="display:inline-block;width:104px;color:var(--muted)">${lbl}</span>${inner}</div>`;
     h += `<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:8px 10px;margin:0 0 9px">`
-      + `<div><b>${_teamEsc(c.skill)}</b> <span class="team-badge tb-self">${_teamEsc(c.role)} 学的</span> <span class="tm-x">${_teamEsc(c.learned_at||'')}</span> ${sim}</div>`
+      + `<div><b>${sk}</b> <span class="team-badge tb-self">${ro} 学的</span> <span class="tm-x">${_teamEsc(c.learned_at||'')}</span> ${sim}</div>`
       + `<div style="font-size:12px;margin:3px 0">${_teamEsc(c.desc||'(无描述)')}</div>`
       + (c.note ? `<div class="ts-sub" style="font-size:11.5px">来自:${_teamEsc(c.note)}</div>` : '')
       + `<details style="margin:4px 0"><summary style="cursor:pointer;font-size:11.5px;color:var(--muted)">看全文(自己判断好不好)</summary>`
       + `<pre style="white-space:pre-wrap;font-size:11px;background:var(--surface,#f8fafc);padding:6px;border-radius:6px;max-height:260px;overflow:auto;margin:4px 0 0">${_teamEsc(c.content||'(读不到内容)')}</pre></details>`
-      + `<div style="display:flex;gap:6px;align-items:center;margin-top:5px">`
-      + `<code style="font-size:11px;background:var(--surface,#f3f4f6);padding:3px 7px;border-radius:5px;flex:1;overflow:auto;white-space:nowrap">${cmd}</code>`
-      + `<button onclick="(navigator.clipboard&&navigator.clipboard.writeText('${cmd}'))" style="font-size:11px;padding:3px 9px;cursor:pointer;border:1px solid var(--border,#e5e7eb);border-radius:5px;background:var(--bg,#fff)">复制命令</button>`
-      + `</div><div class="ts-sub" style="font-size:10.5px;margin-top:3px">门户只读;复制命令到你的 CC/codex 会话人工跑 → 搬进资源中心 + install-team。</div>`
+      // ── 操作入口:Promote ▸ 填 scope → 拼命令 → 复制(门户只读,你回 CC 跑)──
+      + `<button onclick="_teamPromoteToggle('${sk}')" style="font-size:11.5px;padding:3px 11px;margin-top:5px;cursor:pointer;border:1px solid var(--accent,#5b8def);color:var(--accent,#5b8def);border-radius:5px;background:var(--bg,#fff)">Promote ▸ 填 scope</button>`
+      + `<div id="pf-${sk}" data-role="${ro}" style="display:none;margin-top:7px;padding:8px 10px;background:var(--surface,#f8fafc);border-radius:6px;font-size:11.5px">`
+      + fld('给谁用 division', `<select id="pf-div-${sk}" oninput="_teamPromoteShow('${ro}','${sk}')" style="font-size:11.5px;padding:2px 6px">${divOpts}</select>`)
+      + fld('平台 hand', `<input id="pf-hand-${sk}" value="*" oninput="_teamPromoteShow('${ro}','${sk}')" style="font-size:11.5px;padding:2px 6px;width:130px"> <span class="tm-x">* = 所有手</span>`)
+      + fld('项目 project', `<input id="pf-proj-${sk}" value="*" oninput="_teamPromoteShow('${ro}','${sk}')" style="font-size:11.5px;padding:2px 6px;width:130px"> <span class="tm-x">* = 所有项目</span>`)
+      + `<div style="display:flex;gap:6px;align-items:center;margin-top:6px">`
+      + `<code id="pf-out-${sk}" style="font-size:11px;background:var(--bg,#fff);padding:3px 7px;border-radius:5px;flex:1;overflow:auto;white-space:nowrap"></code>`
+      + `<button onclick="_teamPromoteCopy('${ro}','${sk}')" style="font-size:11px;padding:3px 11px;cursor:pointer;border:1px solid var(--border,#e5e7eb);border-radius:5px;background:var(--bg,#fff)">复制</button>`
+      + `</div>`
+      + `<div class="ts-sub" style="font-size:10.5px;margin-top:4px">复制到你的 CC 会话跑 → 写进 team/skills + resources.yaml → 顺手 <code>git commit</code> + <code>bash team/scripts/install-team.sh</code> 分发。门户只读,不替你写真相源。</div>`
+      + `</div>`
       + `</div>`;
   });
   h += card('orphan 资源(无角色消费 → 解 binding 或下线)', H.orphans||[], resChip, '✓ 无孤儿');
@@ -565,6 +578,31 @@ async function _teamApplyLive(){ if (!_teamCy || _teamView !== 'graph') return; 
 function _teamPulseTick(){ if (!_teamCy || _teamView !== 'graph') return; _teamPulseOn = !_teamPulseOn; try { _teamCy.nodes('node[live="running"]').toggleClass('lp', _teamPulseOn); } catch(_){} }
 function _teamStartLive(){ _teamStopLive(); _teamApplyLive(); _teamLiveTimer = setInterval(_teamApplyLive, 9000); _teamPulseTimer = setInterval(_teamPulseTick, 600); }
 function _teamStopLive(){ if (_teamLiveTimer){ clearInterval(_teamLiveTimer); _teamLiveTimer = null; } if (_teamPulseTimer){ clearInterval(_teamPulseTimer); _teamPulseTimer = null; } }
+
+// ── Promote 操作入口(门户只读:填 scope → 拼命令 → 复制,你回 CC 跑)──
+function _teamPromoteToggle(skill){
+  const f = document.getElementById('pf-' + skill); if (!f) return;
+  const open = f.style.display === 'none'; f.style.display = open ? 'block' : 'none';
+  if (open) _teamPromoteShow(f.getAttribute('data-role'), skill);
+}
+function _teamPromoteCmd(role, skill){
+  const v = id => { const e = document.getElementById(id); return e ? (e.value || '') : ''; };
+  const div = v('pf-div-' + skill).trim();
+  const hand = (v('pf-hand-' + skill).trim() || '*');
+  const proj = (v('pf-proj-' + skill).trim() || '*');
+  let cmd = `python3 team/learn/promote-learned.py --role ${role} --skill ${skill}`;
+  if (div) cmd += ` --division ${div}`;
+  if (hand && hand !== '*') cmd += ` --hand '${hand}'`;
+  if (proj && proj !== '*') cmd += ` --project ${proj}`;
+  return cmd;
+}
+function _teamPromoteShow(role, skill){ const o = document.getElementById('pf-out-' + skill); if (o) o.textContent = _teamPromoteCmd(role, skill); }
+function _teamPromoteCopy(role, skill){
+  const cmd = _teamPromoteCmd(role, skill); _teamPromoteShow(role, skill);
+  try { navigator.clipboard && navigator.clipboard.writeText(cmd); } catch(_){}
+  const o = document.getElementById('pf-out-' + skill);
+  if (o){ const bg = o.style.background; o.style.background = '#dcfce7'; setTimeout(() => { o.style.background = bg; }, 700); }
+}
 
 // ── Rail 红点:有待 promote 的候选 skill → Team 导航按钮显 ●N(不打开 Team 也看得见 = 通知)──
 async function _teamUpdateRailDot(){
