@@ -13,7 +13,7 @@
 
 let _teamData = null, _teamView = null, _teamCy = null, _teamSel = null, _teamStyled = false;
 let _teamLiveTimer = null, _teamPulseTimer = null, _teamPulseOn = false;
-let _teamPortal = null, _teamCatKind = 'all', _teamCatQuery = '';  // resource-centric Catalog (L1)
+let _teamPortal = null, _teamCatKind = 'all', _teamCatQuery = '', _teamCatViewF = 'all';  // resource-centric Catalog (L1) + saved views
 const _TEAM_VIEW_KEY = 'hermes-webui-team-view';
 const _TEAM_KIND_BADGE = { skill:'tb-native', plugin:'tb-oss', cli:'tb-mcp', toolset:'tb-shared', mcp:'tb-mcp', role:'tb-self' };
 
@@ -77,6 +77,13 @@ function _teamInjectStyle(){
   #teamCenter .team-cat-q{margin-left:auto;padding:4px 10px;font-size:12px;border:1px solid var(--border,#e5e7eb);border-radius:6px;min-width:200px;background:var(--bg,#fff);color:var(--text,#111)}
   #teamCenter .team-cat-count{padding:6px 2px 2px;font-size:11px;color:var(--muted,#6b7280)}
   .th-orphan{background:#fdecec;color:#b91c1c;border-color:#f5c6c6} .th-warn{background:#fff4e0;color:#a8620b;border-color:#f3dcb0}
+  #teamCenter .team-matrix td.mx-d{background:#1a56db} #teamCenter .team-matrix td.mx-i{background:#bcd3fb}
+  #teamCenter .team-mx-legend{display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:6px 2px;font-size:11px;color:var(--muted,#6b7280)}
+  #teamCenter .team-mx-legend i{display:inline-block;width:11px;height:11px;border-radius:2px;vertical-align:-1px;margin-right:4px}
+  #teamCenter .team-mx-legend i.mx-d{background:#1a56db} #teamCenter .team-mx-legend i.mx-i{background:#bcd3fb}
+  #teamCenter .team-cat-view{display:inline-flex;gap:4px;align-items:center;font-size:11px;color:var(--muted,#6b7280)}
+  #teamCenter .team-cat-view button{padding:2px 8px;font-size:11px;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:var(--bg,#fff);color:var(--muted,#6b7280);cursor:pointer}
+  #teamCenter .team-cat-view button.active{background:#111827;color:#fff;border-color:transparent}
   `;
   const el = document.createElement('style'); el.id = 'teamPanelStyle'; el.textContent = css; document.head.appendChild(el);
 }
@@ -193,24 +200,28 @@ function _teamRenderRoster(center){
   wrap.innerHTML = html;
 }
 
-// Reuse view = capability × role matrix (the industry skills-matrix pattern):
-// rows = capabilities sorted by reuse count desc (most-shared on top = the reuse
-// hierarchy), cols = roles grouped by division, cells colored by source. Hover a
-// row/column → it highlights; click → detail. Matrix beats a bipartite hairball
-// for "what is reused" (visvar.github.io/abdelaal2022comparative).
-function _teamRenderReuse(center){
+// Reuse view (L2) = resource × role matrix, tri-state cells (portal-based):
+// direct (role.bind) vs inherited (group selector, ADR 0034 就近覆盖) vs none —
+// visualising the v2 selector-inheritance the old binary matrix couldn't. Rows =
+// resources sorted by reuse desc (most-shared on top = reuse hierarchy), cols =
+// roles grouped by division. Matrix beats a bipartite hairball for >20 dense nodes
+// (Ghoniem/Okoe/Abdelaal); see design/team-portal-ui.md §6.
+async function _teamRenderReuse(center){
   const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
-  const caps = _teamBuildCaps().slice().sort((a, b) => b.roles.length - a.roles.length || a.label.localeCompare(b.label));
-  const roles = _teamRoles().slice().sort((a, b) => (_TEAM_DIV_ORDER.indexOf(a.division) - _TEAM_DIV_ORDER.indexOf(b.division)) || a.name.localeCompare(b.name));
-  if (!caps.length || !roles.length){ wrap.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:12px">No capabilities.</div>'; return; }
-  let h = '<table class="team-matrix"><thead><tr><th class="tm-corner">capability ↓ · ×reuse / role →</th>';
+  wrap.innerHTML = '<div style="padding:8px;color:var(--muted);font-size:12px">Loading matrix…</div>';
+  const p = await _teamEnsurePortal();
+  if (!p){ wrap.innerHTML = '<div style="padding:8px;font-size:12px">No portal data. Run team/scripts/gen-portal-view.py.</div>'; return; }
+  const res = (p.resources||[]).filter(r => (r.consumer_count||0) > 0).sort((a,b)=>(b.consumer_count-a.consumer_count)||a.name.localeCompare(b.name));
+  const roles = (p.roles||[]).slice().sort((a,b)=>(_TEAM_DIV_ORDER.indexOf(a.division)-_TEAM_DIV_ORDER.indexOf(b.division))||a.name.localeCompare(b.name));
+  if (!res.length || !roles.length){ wrap.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:12px">No reuse data.</div>'; return; }
+  let h = '<div class="team-mx-legend"><span><i class="mx-d"></i>direct (role.bind)</span><span><i class="mx-i"></i>inherited (group selector)</span><span class="tm-x">rows=resource ×reuse · cols=role by division · click row/col for detail</span></div>';
+  h += '<table class="team-matrix"><thead><tr><th class="tm-corner">resource ↓ ×reuse / role →</th>';
   roles.forEach((r, i) => { h += `<th class="tm-rolehead" data-col="${i}" style="border-top:3px solid ${_TEAM_DIV_COLORS[r.division] || '#999'}" title="${_teamEsc(r.name)} · ${_teamEsc(r.division)}" onclick="_teamSelectRole('${_teamEsc(r.name)}')" onmouseover="_teamColHL(${i},true)" onmouseout="_teamColHL(${i},false)"><span>${_teamEsc(r.name)}</span></th>`; });
   h += '</tr></thead><tbody>';
-  caps.forEach(c => {
-    const used = new Set(c.roles);
-    const col = _TEAM_SRC_COLOR[c.source.cls] || '#999';
-    h += `<tr><td class="tm-cap" style="border-left:4px solid ${col}" onclick="_teamSelectCapability('${c.id}')" title="${_teamEsc(c.label)} — ${_teamEsc(c.source.label)}"><span>${_teamEsc(c.label.replace(/^[^/]*\//, ''))}</span> <span class="tm-x">×${c.roles.length}</span></td>`;
-    roles.forEach((r, i) => { const on = used.has(r.name); h += `<td class="tm-cell" data-col="${i}"${on ? ` style="background:${col}"` : ''} onmouseover="_teamColHL(${i},true)" onmouseout="_teamColHL(${i},false)"></td>`; });
+  res.forEach(rs => {
+    const dir = new Set(rs.consumers_direct||[]), inh = new Set(rs.consumers_inherited||[]);
+    h += `<tr><td class="tm-cap" onclick="_teamSelectResource('${_teamEsc(rs.name)}','${_teamEsc(rs.kind)}')" title="${_teamEsc(rs.name)} · ${_teamEsc(rs.kind)}"><span>${_teamEsc(rs.name.replace(/^[^/]*\//, ''))}</span> <span class="tm-x">×${rs.consumer_count}</span></td>`;
+    roles.forEach((r, i) => { const st = dir.has(r.name) ? 'mx-d' : (inh.has(r.name) ? 'mx-i' : ''); h += `<td class="tm-cell ${st}" data-col="${i}" onmouseover="_teamColHL(${i},true)" onmouseout="_teamColHL(${i},false)"></td>`; });
     h += '</tr>';
   });
   h += '</tbody></table>';
@@ -261,12 +272,18 @@ async function _teamRenderCatalog(center){
     .concat([['role','role',(p.roles||[]).length]]);
   let h = '<div class="team-cat-bar">';
   tabs.forEach(([k,lbl,n]) => { h += `<button class="team-kind-btn${_teamCatKind===k?' active':''}" onclick="_teamSetCatKind('${k}')">${_teamEsc(lbl)} <span class="tk-n">${n}</span></button>`; });
-  h += `<input class="team-cat-q" placeholder="search name / does / source…" value="${_teamEsc(_teamCatQuery)}" oninput="_teamCatSearch(this.value)"></div><div id="teamCatBody"></div>`;
+  h += `<input class="team-cat-q" placeholder="search name / does / source…" value="${_teamEsc(_teamCatQuery)}" oninput="_teamCatSearch(this.value)"></div>`;
+  // saved views (built-in dynamic lenses; design L2 §3)
+  const views = [['all','All'],['orphan','Orphans'],['external','External'],['nosource','Self/native']];
+  h += '<div class="team-cat-bar" style="border-bottom:none;padding-top:0"><span class="team-cat-view">views:' + views.map(([k,l])=>` <button class="${_teamCatViewF===k?'active':''}" onclick="_teamSetCatView('${k}')">${_teamEsc(l)}</button>`).join('') + '</span></div>';
+  h += '<div id="teamCatBody"></div>';
   wrap.innerHTML = h;
   _teamCatFill();
 }
 function _teamSetCatKind(k){ _teamCatKind = k; _teamRender(); }
+function _teamSetCatView(v){ _teamCatViewF = v; _teamRender(); }   // built-in saved views
 function _teamCatSearch(v){ _teamCatQuery = v; _teamCatFill(); }   // refill body only → input keeps focus
+function _teamCatViewPred(r){ const v=_teamCatViewF; if(v==='orphan') return (r.health||[]).includes('orphan'); if(v==='external') return !!r.marketplace; if(v==='nosource') return !r.marketplace && !r.url; return true; }
 function _teamCatFill(){
   const body = document.getElementById('teamCatBody'); if (!body || !_teamPortal) return;
   const p = _teamPortal, q = _teamCatQuery.trim().toLowerCase();
@@ -276,7 +293,7 @@ function _teamCatFill(){
     rows.forEach(r => { const hd=r.hand; html += `<tr class="team-row" onclick="_teamSelectRole('${_teamEsc(r.name)}')"><td><b>${_teamEsc(r.name)}</b>${r.is_orchestrator?' <span class="team-badge tb-official">orch</span>':''}</td><td>${_teamEsc(r.division||'')}</td><td>${_teamEsc((!hd||hd==='none')?'—':hd)}</td><td>${_teamEsc(r.tier||'')}</td><td style="max-width:360px">${_teamEsc(r.does||'')}</td></tr>`; });
     body.innerHTML = html + '</tbody></table>'; return;
   }
-  let rows = (p.resources||[]).filter(r => _teamCatKind==='all' || r.kind===_teamCatKind);
+  let rows = (p.resources||[]).filter(r => (_teamCatKind==='all' || r.kind===_teamCatKind) && _teamCatViewPred(r));
   if (q) rows = rows.filter(r => (r.name+' '+(r.does||'')+' '+(r.marketplace||'')).toLowerCase().includes(q));
   rows.sort((a,b)=> (b.consumer_count||0)-(a.consumer_count||0) || a.name.localeCompare(b.name));
   let html = `<div class="team-cat-count">${rows.length} resources · sorted by reuse</div><table class="team-tbl"><thead><tr><th>resource</th><th>kind</th><th>source</th><th>×used</th><th>health</th></tr></thead><tbody>`;
