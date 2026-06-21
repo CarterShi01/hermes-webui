@@ -28,12 +28,22 @@ const _TEAM_SRC_COLOR = { 'tb-native':'#3fa45b','tb-self':'#7c3aed','tb-oss':'#1
 
 function _teamEsc(s){ return (typeof esc === 'function') ? esc(s) : String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function _teamLoadScript(src){ return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.async = false; s.onload = () => res(); s.onerror = () => rej(new Error('failed to load ' + src)); document.head.appendChild(s); }); }
-async function _teamEnsureLibs(){
-  if (!window.jsyaml)         await _teamLoadScript('static/vendor/js-yaml/4.1.0/js-yaml.min.js');
+// Perf: load heavy libs ONLY for views that need them (cytoscape = graph/pipeline;
+// js-yaml + /api/team = graph/roster). Catalog/Reuse/Planes/Health/Sources/Calibrate
+// need neither → fast first paint (was: eager-load all on every Team open).
+async function _teamEnsureCy(){
   if (!window.cytoscape)      await _teamLoadScript('static/vendor/cytoscape.min.js');
   if (!window.dagre)          await _teamLoadScript('static/vendor/dagre.min.js');
   if (!window.cytoscapeDagre) await _teamLoadScript('static/vendor/cytoscape-dagre.js');
   try { if (window.cytoscape && window.cytoscapeDagre && !window.cytoscape.__dagreRegistered){ window.cytoscape.use(window.cytoscapeDagre); window.cytoscape.__dagreRegistered = true; } } catch(_){}
+}
+async function _teamEnsureData(){   // roster v1 yaml — only graph/roster need it
+  if (_teamData) return _teamData;
+  if (!window.jsyaml) await _teamLoadScript('static/vendor/js-yaml/4.1.0/js-yaml.min.js');
+  const r = await fetch('/api/team', { headers: { 'Accept': 'application/json' } });
+  const raw = ((await r.json()) || {}).team || {};
+  _teamData = { roster: raw.roster ? jsyaml.load(raw.roster) : null, plugins: raw.plugins ? jsyaml.load(raw.plugins) : null, engines: raw.engines ? jsyaml.load(raw.engines) : null };
+  return _teamData;
 }
 
 function _teamInjectStyle(){
@@ -92,18 +102,16 @@ function _teamInjectStyle(){
 }
 
 // Entry point — mirrors loadKanban(). Called by switchPanel('team') and Refresh.
+// Fast path: only the small portal.json (no cytoscape/yaml). Heavy libs + roster
+// yaml load lazily inside the views that need them (graph/roster/pipeline).
 async function loadTeamPanel(force){
   _teamInjectStyle();
-  const center = document.getElementById('teamCenter');
-  if (_teamData && !force){ _teamRender(); return; }
-  if (center) center.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">Loading team…</div>';
-  try {
-    await _teamEnsureLibs();
-    const r = await fetch('/api/team', { headers: { 'Accept': 'application/json' } });
-    const raw = ((await r.json()) || {}).team || {};
-    _teamData = { roster: raw.roster ? jsyaml.load(raw.roster) : null, plugins: raw.plugins ? jsyaml.load(raw.plugins) : null, engines: raw.engines ? jsyaml.load(raw.engines) : null };
-  } catch(e){ if (center) center.innerHTML = '<div style="padding:16px;color:#e05252;font-size:12px">Failed to load team: ' + _teamEsc(e && e.message) + '</div>'; return; }
+  if (force){ _teamData = null; _teamPortal = null; }
   _teamView = _teamView || localStorage.getItem(_TEAM_VIEW_KEY) || 'catalog';
+  const center = document.getElementById('teamCenter');
+  if (center && !_teamPortal) center.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">Loading team…</div>';
+  try { await _teamEnsurePortal(); }
+  catch(e){ if (center) center.innerHTML = '<div style="padding:16px;color:#e05252;font-size:12px">Failed to load team: ' + _teamEsc(e && e.message) + '</div>'; return; }
   _teamRender();
 }
 
@@ -135,13 +143,12 @@ function _teamBuildCaps(){
 function setTeamView(v){ _teamView = v; try { localStorage.setItem(_TEAM_VIEW_KEY, v); } catch(_){} _teamRender(); }
 
 function _teamRender(){
-  if (!_teamData) return;
   [['teamViewCatalogBtn','catalog'],['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewPipelineBtn','pipeline'],['teamViewPlanesBtn','planes'],['teamViewHealthBtn','health'],['teamViewSourcesBtn','sources'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
-  // sidebar: stats + legend
+  // sidebar: stats (from portal.json) + legend
   const info = document.getElementById('teamInfo');
   if (info){
-    const roles = _teamRoles(), divs = new Set(roles.map(r => r.division)), core = roles.filter(r => r.tier === 'core').length;
-    let h = `<div class="ti-stat"><b>${_teamEsc((_teamData.roster && _teamData.roster.team) || 'team')}</b> · ${roles.length} roles · ${divs.size} divisions · ${core} core / ${roles.length - core} optional</div>`;
+    const st = _teamPortal && _teamPortal.stats;
+    let h = st ? `<div class="ti-stat"><b>${_teamEsc((_teamPortal.team)||'team')}</b> · ${st.resources} resources · ${st.roles} roles · ${Object.keys(st.by_kind||{}).length} kinds${st.orphans?` · <span style="color:#b91c1c">${st.orphans} orphan</span>`:''}</div>` : '<div class="ti-stat">team</div>';
     if (_teamView === 'graph') h += '<div class="ti-legend"><span><i style="background:' + _TEAM_AUTONOMY_COLOR.autonomous + '"></i>autonomous</span><span><i style="background:' + _TEAM_AUTONOMY_COLOR['hitl-assistant'] + '"></i>hitl</span><span>◇ brain-side</span><span>ring=live: <i style="background:#ffc233"></i>run <i style="background:#5b8def"></i>ready <i style="background:#e05252"></i>blocked</span></div>';
     info.innerHTML = h;
   }
@@ -160,7 +167,10 @@ function _teamRender(){
   _teamRenderDetail();
 }
 
-function _teamRenderGraph(center){
+async function _teamRenderGraph(center){
+  center.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">Loading graph…</div>';
+  await _teamEnsureData(); await _teamEnsureCy();
+  if (_teamView !== 'graph') return; center.innerHTML = '';
   const host = document.createElement('div'); host.className = 'team-cy'; center.appendChild(host);
   const nodes = [], edges = [], seen = {};
   nodes.push({ data: { id: '__root', label: 'Founder ▸ CTO / Kanban', kind: 'root' } });
@@ -194,7 +204,10 @@ function _teamRenderGraph(center){
   _teamStartLive();
 }
 
-function _teamRenderRoster(center){
+async function _teamRenderRoster(center){
+  center.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">Loading roster…</div>';
+  await _teamEnsureData();
+  if (_teamView !== 'roster') return; center.innerHTML = '';
   const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
   const byDiv = {}; _teamRoles().forEach(r => (byDiv[r.division] = byDiv[r.division] || []).push(r));
   let html = '';
@@ -242,7 +255,9 @@ function _teamColHL(i, on){ document.querySelectorAll('#teamCenter .team-matrix 
 // (consumers_direct/inherited + role.hand); JS does no binding. design §L3.
 function _teamSetPipeRes(v){ const i = v.lastIndexOf('::'); _teamPipeRes = { name: v.slice(0, i), kind: v.slice(i + 2) }; _teamRender(); }
 async function _teamRenderPipeline(center){
-  const p = await _teamEnsurePortal();
+  center.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:12px">Loading pipeline…</div>';
+  const p = await _teamEnsurePortal(); await _teamEnsureCy();
+  if (_teamView !== 'pipeline') return;
   if (!p){ center.innerHTML = '<div style="padding:8px;font-size:12px">No portal data. Run team/scripts/gen-portal-view.py.</div>'; return; }
   const consumed = (p.resources||[]).filter(r => r.consumer_count > 0).sort((a,b)=>(b.consumer_count-a.consumer_count)||a.name.localeCompare(b.name));
   if (!consumed.length){ center.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:12px">No bound resources to trace.</div>'; return; }
@@ -255,7 +270,8 @@ async function _teamRenderPipeline(center){
   const hands = [...new Set(allRoles.map(handOf))];
   const divs = new Set(allRoles.map(n => (roleBy[n]||{}).division).filter(Boolean));
   const hc = {}; allRoles.forEach(n => { const h = handOf(n); hc[h] = (hc[h]||0)+1; });
-  const impact = `Changing <b>${_teamEsc(r.name)}</b> affects <b>${allRoles.length}</b> role(s) across <b>${divs.size}</b> division(s) → hands: ` + hands.map(h => `${_teamEsc(_TEAM_HAND_LABEL[h]||h)} (${hc[h]})`).join(' · ');
+  const AGG = allRoles.length > 8;   // 多消费者→按 division 聚合中间层(消毛球;Inframap 式)
+  const impact = `Changing <b>${_teamEsc(r.name)}</b> affects <b>${allRoles.length}</b> role(s) across <b>${divs.size}</b> division(s) → hands: ` + hands.map(h => `${_teamEsc(_TEAM_HAND_LABEL[h]||h)} (${hc[h]})`).join(' · ') + (AGG ? ' <span class="tm-x">· 中间层按部门聚合(选复用更少的资源看具体角色)</span>' : '');
   let bar = '<div class="team-cat-bar"><span class="tm-x">trace resource ↓</span> <select class="team-cat-q" style="margin-left:0;min-width:260px" onchange="_teamSetPipeRes(this.value)">';
   consumed.forEach(x => { const val = x.name + '::' + x.kind; bar += `<option value="${_teamEsc(val)}"${(x.name===r.name&&x.kind===r.kind)?' selected':''}>${_teamEsc(x.name)} · ${_teamEsc(x.kind)} ×${x.consumer_count}</option>`; });
   bar += '</select></div><div class="team-pipe-impact">' + impact + '</div>';
@@ -264,14 +280,24 @@ async function _teamRenderPipeline(center){
   const nodes = [], edges = [];
   nodes.push({ data: { id:'res', label: r.name.replace(/^[^/]*\//,'') + '  [' + r.kind + ']', kind:'res' } });
   hands.forEach(h => nodes.push({ data: { id:'hand__'+h, label: _TEAM_HAND_LABEL[h]||h, kind:'hand' } }));
-  allRoles.forEach(n => { const ro = roleBy[n]||{}; nodes.push({ data: { id:'role__'+n, label:n, kind:'role', role:n, color:_TEAM_DIV_COLORS[ro.division]||'#6b7280' } });
-    edges.push({ data: { id:'e_res_'+n, source:'res', target:'role__'+n, rel: dir.has(n)?'direct':'inherited' } });
-    edges.push({ data: { id:'e_'+n+'_h', source:'role__'+n, target:'hand__'+handOf(n) } });
-  });
+  if (AGG){
+    const byDiv = {}; allRoles.forEach(n => { const d = (roleBy[n]||{}).division || '?'; (byDiv[d]=byDiv[d]||[]).push(n); });
+    Object.keys(byDiv).forEach(d => { const rs = byDiv[d];
+      nodes.push({ data: { id:'div__'+d, label: d+' ('+rs.length+')', kind:'div', color:_TEAM_DIV_COLORS[d]||'#6b7280' } });
+      edges.push({ data: { id:'e_res_'+d, source:'res', target:'div__'+d, rel: rs.some(n=>dir.has(n))?'direct':'inherited' } });
+      [...new Set(rs.map(handOf))].forEach(h => edges.push({ data: { id:'e_'+d+'_'+h, source:'div__'+d, target:'hand__'+h } }));
+    });
+  } else {
+    allRoles.forEach(n => { const ro = roleBy[n]||{}; nodes.push({ data: { id:'role__'+n, label:n, kind:'role', role:n, color:_TEAM_DIV_COLORS[ro.division]||'#6b7280' } });
+      edges.push({ data: { id:'e_res_'+n, source:'res', target:'role__'+n, rel: dir.has(n)?'direct':'inherited' } });
+      edges.push({ data: { id:'e_'+n+'_h', source:'role__'+n, target:'hand__'+handOf(n) } });
+    });
+  }
   _teamCy = cytoscape({ container: host, elements: { nodes, edges }, style: [
       { selector:'node', style:{ 'label':'data(label)','font-size':10,'color':'#fff','text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':110,'width':'label','height':'label','padding':7,'shape':'round-rectangle' } },
       { selector:'node[kind="res"]', style:{ 'background-color':'#111827','font-size':12,'font-weight':'bold' } },
       { selector:'node[kind="role"]', style:{ 'background-color':'data(color)' } },
+      { selector:'node[kind="div"]', style:{ 'background-color':'data(color)','font-size':11 } },
       { selector:'node[kind="hand"]', style:{ 'background-color':'#0a6e80','shape':'round-diamond','font-size':11 } },
       { selector:'edge', style:{ 'width':1.6,'line-color':'#94a3b8','target-arrow-color':'#94a3b8','target-arrow-shape':'triangle','curve-style':'bezier' } },
       { selector:'edge[rel="direct"]', style:{ 'line-color':'#1a56db','target-arrow-color':'#1a56db','width':2.4 } },
@@ -292,7 +318,7 @@ async function _teamRenderCalibrate(center){
   let summary = null;
   try { const r = await fetch('/api/team/eval', { headers: { 'Accept': 'application/json' } }); if (r.ok) summary = ((await r.json()) || {}).summary; } catch(_){}
   const rows = (summary && summary.rows) || [];
-  if (!rows.length){ wrap.innerHTML = '<div style="font-size:12.5px;line-height:1.7"><b>No eval yet.</b> Hit-rate is computed by the open-source engine <a href="https://github.com/promptfoo/promptfoo" target="_blank" rel="noopener">promptfoo</a> (we only render its output). Run in <code>team/eval/</code>:<pre style="background:var(--surface,#f3f4f6);padding:8px;border-radius:6px;overflow:auto">npx promptfoo@latest eval -c promptfooconfig.yaml -o results.json\npython3 summarize.py results.json eval-summary.json</pre></div>'; return; }
+  if (!rows.length){ wrap.innerHTML = '<div style="max-width:640px;margin:8px auto;padding:18px 20px;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:var(--surface,#f9fafb);font-size:12.5px;line-height:1.7"><div style="font-size:14px;font-weight:600;margin-bottom:4px">📊 路由评测尚未运行</div>这是<b>空状态,不是错误</b>。命中率由开源引擎 <a href="https://github.com/promptfoo/promptfoo" target="_blank" rel="noopener">promptfoo</a> 算(本面板只渲染其输出)。在 <code>team/eval/</code> 跑一次即可填充:<pre style="background:var(--bg,#fff);border:1px solid var(--border,#eee);padding:8px;border-radius:6px;overflow:auto;margin-top:8px">npx promptfoo@latest eval -c promptfooconfig.yaml -o results.json\npython3 summarize.py results.json eval-summary.json</pre>跑完后产出 <code>eval-summary.json</code>,本视图自动显示总命中率 + per-role precision/recall + 混淆矩阵。</div>'; return; }
   const roles = [...new Set(rows.flatMap(r => [r.expected, r.actual]).filter(Boolean))].sort();
   const total = rows.length, correct = rows.filter(r => r.ok || r.expected === r.actual).length;
   const conf = {}; roles.forEach(e => { conf[e] = {}; roles.forEach(a => conf[e][a] = 0); });
@@ -422,7 +448,10 @@ function _teamRenderDetail(){ const el = document.getElementById('teamDetail'); 
 function _teamRenderResourceDetail(el, name, kind){
   const r = ((_teamPortal && _teamPortal.resources)||[]).find(x => x.name===name && x.kind===kind); if (!r) return;
   const mk = (_teamPortal && _teamPortal.marketplaces) || {}, kb = _TEAM_KIND_BADGE[r.kind]||'tb-shared';
-  let h = `<h3>${_teamEsc(r.name)}</h3><div class="ts-sub"><span class="team-badge ${kb}">${_teamEsc(r.kind)}</span> ${(r.health||[]).map(x=>`<span class="team-badge th-orphan">${_teamEsc(x)}</span>`).join('')}</div>`;
+  let h = `<h3>${_teamEsc(r.name)}</h3>`;
+  h += `<div class="ts-sub" style="margin:3px 0 6px"><span class="team-badge ${kb}">kind: ${_teamEsc(r.kind)}</span> ${(r.health||[]).map(x=>`<span class="team-badge th-orphan">${_teamEsc(x)}</span>`).join('')}</div>`;
+  // labels up top (right under kind) — most-asked-for fields, keep them visible
+  if (r.labels && Object.keys(r.labels).length) h += '<div class="ts-sec">labels</div><div style="margin-bottom:4px">' + Object.entries(r.labels).map(([k,v])=>`<span class="team-chip">${_teamEsc(k)}=${_teamEsc(String(v))}</span>`).join('') + '</div>';
   if (r.does) h += `<div style="margin:8px 0;font-size:12.5px;line-height:1.6">${_teamEsc(r.does)}</div>`;
   h += '<div class="ts-sec">provenance</div>';
   if (r.marketplace){ const spec = mk[r.marketplace]||{}, repo = spec.repo ? 'https://github.com/'+spec.repo : (r.url||null); h += `<div class="ts-sub">marketplace <b>${_teamEsc(r.marketplace)}</b>${repo?` · <a href="${_teamEsc(repo)}" target="_blank" rel="noopener">repo</a>`:''}${r.license?` · ${_teamEsc(r.license)}`:''}</div>`; }
@@ -430,7 +459,6 @@ function _teamRenderResourceDetail(el, name, kind){
   else if (r.endpoint) h += `<div class="ts-sub">endpoint <code>${_teamEsc(r.endpoint)}</code></div>`;
   else h += '<div class="ts-sub">self-built / native</div>';
   if (r.note) h += `<div class="ts-sub" style="margin-top:4px">${_teamEsc(r.note)}</div>`;
-  if (r.labels && Object.keys(r.labels).length) h += '<div class="ts-sec">labels</div><div>' + Object.entries(r.labels).map(([k,v])=>`<span class="team-chip">${_teamEsc(k)}=${_teamEsc(String(v))}</span>`).join('') + '</div>';
   h += `<div class="ts-sec">dependents · ×${r.consumer_count||0}</div>`;
   h += (r.consumers && r.consumers.length) ? '<div>'+r.consumers.map(c=>`<span class="team-chip" style="cursor:pointer" onclick="_teamSelectRole('${_teamEsc(c)}')">${_teamEsc(c)}</span>`).join('')+'</div>' : '<div class="ts-sub">none — ' + ((r.kind==='cli'||r.kind==='toolset')?'ambient/native (not role-bound)':'orphan: unbind or retire') + '</div>';
   el.innerHTML = h;
