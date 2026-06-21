@@ -14,6 +14,8 @@
 let _teamData = null, _teamView = null, _teamCy = null, _teamSel = null, _teamStyled = false;
 let _teamLiveTimer = null, _teamPulseTimer = null, _teamPulseOn = false;
 let _teamPortal = null, _teamCatKind = 'all', _teamCatQuery = '', _teamCatViewF = 'all';  // resource-centric Catalog (L1) + saved views
+let _teamPipeRes = null;  // L3 pipeline/lineage: { name, kind } currently traced
+const _TEAM_HAND_LABEL = { 'claude-code':'Claude Code', 'codex':'Codex', 'none':'Hermes (brain)' };
 const _TEAM_VIEW_KEY = 'hermes-webui-team-view';
 const _TEAM_KIND_BADGE = { skill:'tb-native', plugin:'tb-oss', cli:'tb-mcp', toolset:'tb-shared', mcp:'tb-mcp', role:'tb-self' };
 
@@ -84,6 +86,7 @@ function _teamInjectStyle(){
   #teamCenter .team-cat-view{display:inline-flex;gap:4px;align-items:center;font-size:11px;color:var(--muted,#6b7280)}
   #teamCenter .team-cat-view button{padding:2px 8px;font-size:11px;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:var(--bg,#fff);color:var(--muted,#6b7280);cursor:pointer}
   #teamCenter .team-cat-view button.active{background:#111827;color:#fff;border-color:transparent}
+  #teamCenter .team-pipe-impact{padding:5px 8px;font-size:11.5px;color:var(--muted,#6b7280);border-bottom:1px solid var(--border,#eee);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   `;
   const el = document.createElement('style'); el.id = 'teamPanelStyle'; el.textContent = css; document.head.appendChild(el);
 }
@@ -133,7 +136,7 @@ function setTeamView(v){ _teamView = v; try { localStorage.setItem(_TEAM_VIEW_KE
 
 function _teamRender(){
   if (!_teamData) return;
-  [['teamViewCatalogBtn','catalog'],['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
+  [['teamViewCatalogBtn','catalog'],['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewPipelineBtn','pipeline'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
   // sidebar: stats + legend
   const info = document.getElementById('teamInfo');
   if (info){
@@ -148,6 +151,7 @@ function _teamRender(){
   if (_teamView === 'catalog') _teamRenderCatalog(center);
   else if (_teamView === 'roster') _teamRenderRoster(center);
   else if (_teamView === 'reuse') _teamRenderReuse(center);
+  else if (_teamView === 'pipeline') _teamRenderPipeline(center);
   else if (_teamView === 'calibrate') _teamRenderCalibrate(center);
   else _teamRenderGraph(center);
   _teamRenderDetail();
@@ -228,6 +232,56 @@ async function _teamRenderReuse(center){
   wrap.innerHTML = h;
 }
 function _teamColHL(i, on){ document.querySelectorAll('#teamCenter .team-matrix [data-col="' + i + '"]').forEach(el => el.classList.toggle('tm-colhl', on)); }
+
+// Pipeline / Lineage (L3) — trace a resource's dispatch chain: resource → roles
+// (binding: direct=solid / inherited=dashed) → hands (projector → engine). Plus
+// impact analysis ("changing X affects N roles → these hands"). All from portal.json
+// (consumers_direct/inherited + role.hand); JS does no binding. design §L3.
+function _teamSetPipeRes(v){ const i = v.lastIndexOf('::'); _teamPipeRes = { name: v.slice(0, i), kind: v.slice(i + 2) }; _teamRender(); }
+async function _teamRenderPipeline(center){
+  const p = await _teamEnsurePortal();
+  if (!p){ center.innerHTML = '<div style="padding:8px;font-size:12px">No portal data. Run team/scripts/gen-portal-view.py.</div>'; return; }
+  const consumed = (p.resources||[]).filter(r => r.consumer_count > 0).sort((a,b)=>(b.consumer_count-a.consumer_count)||a.name.localeCompare(b.name));
+  if (!consumed.length){ center.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:12px">No bound resources to trace.</div>'; return; }
+  let tgt = _teamPipeRes || (_teamSel && _teamSel.res ? { name:_teamSel.res, kind:_teamSel.resKind } : null);
+  let r = tgt ? consumed.find(x => x.name===tgt.name && x.kind===tgt.kind) : null; if (!r) r = consumed[0];
+  const roleBy = {}; (p.roles||[]).forEach(x => roleBy[x.name] = x);
+  const dir = new Set(r.consumers_direct||[]), inh = new Set(r.consumers_inherited||[]);
+  const allRoles = [...dir, ...inh];
+  const handOf = n => { const ro = roleBy[n]; const h = ro && ro.hand; return (!h) ? 'none' : h; };
+  const hands = [...new Set(allRoles.map(handOf))];
+  const divs = new Set(allRoles.map(n => (roleBy[n]||{}).division).filter(Boolean));
+  const hc = {}; allRoles.forEach(n => { const h = handOf(n); hc[h] = (hc[h]||0)+1; });
+  const impact = `Changing <b>${_teamEsc(r.name)}</b> affects <b>${allRoles.length}</b> role(s) across <b>${divs.size}</b> division(s) → hands: ` + hands.map(h => `${_teamEsc(_TEAM_HAND_LABEL[h]||h)} (${hc[h]})`).join(' · ');
+  let bar = '<div class="team-cat-bar"><span class="tm-x">trace resource ↓</span> <select class="team-cat-q" style="margin-left:0;min-width:260px" onchange="_teamSetPipeRes(this.value)">';
+  consumed.forEach(x => { const val = x.name + '::' + x.kind; bar += `<option value="${_teamEsc(val)}"${(x.name===r.name&&x.kind===r.kind)?' selected':''}>${_teamEsc(x.name)} · ${_teamEsc(x.kind)} ×${x.consumer_count}</option>`; });
+  bar += '</select></div><div class="team-pipe-impact">' + impact + '</div>';
+  center.innerHTML = bar;
+  const host = document.createElement('div'); host.className = 'team-cy'; host.style.top = '70px'; center.appendChild(host);
+  const nodes = [], edges = [];
+  nodes.push({ data: { id:'res', label: r.name.replace(/^[^/]*\//,'') + '  [' + r.kind + ']', kind:'res' } });
+  hands.forEach(h => nodes.push({ data: { id:'hand__'+h, label: _TEAM_HAND_LABEL[h]||h, kind:'hand' } }));
+  allRoles.forEach(n => { const ro = roleBy[n]||{}; nodes.push({ data: { id:'role__'+n, label:n, kind:'role', role:n, color:_TEAM_DIV_COLORS[ro.division]||'#6b7280' } });
+    edges.push({ data: { id:'e_res_'+n, source:'res', target:'role__'+n, rel: dir.has(n)?'direct':'inherited' } });
+    edges.push({ data: { id:'e_'+n+'_h', source:'role__'+n, target:'hand__'+handOf(n) } });
+  });
+  _teamCy = cytoscape({ container: host, elements: { nodes, edges }, style: [
+      { selector:'node', style:{ 'label':'data(label)','font-size':10,'color':'#fff','text-valign':'center','text-halign':'center','text-wrap':'wrap','text-max-width':110,'width':'label','height':'label','padding':7,'shape':'round-rectangle' } },
+      { selector:'node[kind="res"]', style:{ 'background-color':'#111827','font-size':12,'font-weight':'bold' } },
+      { selector:'node[kind="role"]', style:{ 'background-color':'data(color)' } },
+      { selector:'node[kind="hand"]', style:{ 'background-color':'#0a6e80','shape':'round-diamond','font-size':11 } },
+      { selector:'edge', style:{ 'width':1.6,'line-color':'#94a3b8','target-arrow-color':'#94a3b8','target-arrow-shape':'triangle','curve-style':'bezier' } },
+      { selector:'edge[rel="direct"]', style:{ 'line-color':'#1a56db','target-arrow-color':'#1a56db','width':2.4 } },
+      { selector:'edge[rel="inherited"]', style:{ 'line-style':'dashed' } },
+      { selector:'.faded', style:{ 'opacity':0.16 } },
+      { selector:'node.team-sel', style:{ 'border-width':4,'border-color':'#0ea5e9' } },
+    ], layout: { name: window.cytoscape.__dagreRegistered ? 'dagre' : 'breadthfirst', rankDir:'LR', nodeSep:14, rankSep:90, directed:true, padding:18 }, wheelSensitivity:0.2 });
+  _teamCy.on('tap', 'node[kind="role"]', e => _teamSelectRole(e.target.data('role')));
+  _teamCy.on('tap', 'node[kind="res"]', () => _teamSelectResource(r.name, r.kind));
+  _teamCy.on('mouseover', 'node', e => { const hood = e.target.closedNeighborhood(); _teamCy.elements().not(hood).addClass('faded'); });
+  _teamCy.on('mouseout', 'node', () => _teamCy.elements().removeClass('faded'));
+  setTimeout(() => { try { _teamCy && _teamCy.resize(); _teamCy && _teamCy.fit(undefined, 24); } catch(_){} }, 60);
+}
 
 async function _teamRenderCalibrate(center){
   const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
