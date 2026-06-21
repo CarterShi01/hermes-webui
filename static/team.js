@@ -18,6 +18,20 @@ let _teamPipeRes = null;  // L3 pipeline/lineage: { name, kind } currently trace
 const _TEAM_HAND_LABEL = { 'claude-code':'Claude Code', 'codex':'Codex', 'none':'Hermes (brain)' };
 const _TEAM_VIEW_KEY = 'hermes-webui-team-view';
 const _TEAM_KIND_BADGE = { skill:'tb-native', plugin:'tb-oss', cli:'tb-mcp', toolset:'tb-shared', mcp:'tb-mcp', role:'tb-self' };
+let _teamLabelDim = 'division';  // Labels 视图当前维度
+// 每个 tab 顶部的一句话中文介绍(看什么)
+const _TEAM_VIEW_INTRO = {
+  catalog: '资源目录:全部 skill/mcp/cli/plugin/toolset 一张表,按 kind 筛、按复用排序;点行看详情。',
+  labels: '按 label 维度查:挑 division/hand/project,把资源分组看分布(谁挂在哪个维度下)。',
+  graph: '组织树:角色按部门挂在 cto/看板下;ring 实时点亮谁在干。',
+  roster: '花名册表:角色 × tier/autonomy/hand/skills 一览。',
+  reuse: '复用矩阵:资源×角色,深蓝=直接绑定 / 浅蓝=组级继承——看什么被谁复用。',
+  pipeline: '分发管线:一个资源 → 哪些角色 → 哪只手,带"改它冲击谁"影响分析。',
+  planes: '操作面 & 生命周期:5 个 /team 入口面 ↔ 对齐 profile + agent-ops 9 站工具。',
+  health: '体检:孤儿/缺描述/重复资源、薄描述角色等治理信号(带处理动作)。',
+  sources: '来源/供应链:资源按 marketplace 来源分组,看哪些抄来、哪些自建。',
+  calibrate: '路由校准:promptfoo 命中率 + per-role 精度 + 混淆矩阵。',
+};
 
 const _TEAM_NATIVE_SKILLS = new Set(['software-development','autonomous-ai-agents','productivity','creative','research','data-science','mlops','devops','social-media','dogfood','github','kanban-orchestrator','kanban-worker']);
 const _TEAM_SELFBUILD_SKILLS = new Set(['writing-plans','write-adr-from-decision','diagramming','encoding-review']);
@@ -68,7 +82,9 @@ function _teamInjectStyle(){
   #teamCenter .team-matrix tbody tr:hover td{box-shadow:inset 0 0 0 9999px rgba(14,165,233,.10)}
   #teamCenter .team-matrix .tm-colhl{box-shadow:inset 0 0 0 9999px rgba(14,165,233,.12)}
   #teamCenter .team-note{position:absolute;top:6px;left:12px;font-size:11px;color:var(--muted,#6b7280);z-index:2;pointer-events:none;background:var(--main-bg,#fff);padding:0 4px;border-radius:4px}
-  #teamInfo .ti-stat{color:var(--muted,#6b7280)} #teamInfo .ti-legend{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted,#6b7280)}
+  #teamInfo .ti-stat{color:var(--muted,#6b7280)}
+  #teamInfo .ti-intro{margin-top:7px;padding:7px 9px;font-size:12px;line-height:1.6;color:var(--text,#374151);background:var(--surface,#f3f4f6);border-left:3px solid var(--accent,#5b8def);border-radius:0 6px 6px 0}
+  #teamInfo .ti-legend{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted,#6b7280)}
   #teamInfo .ti-legend span{display:inline-flex;align-items:center;gap:4px} #teamInfo .ti-legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
   #panelTeam .team-div-h,#teamCenter .team-div-h{margin:14px 0 4px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,#6b7280)}
   #teamCenter .team-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
@@ -143,12 +159,13 @@ function _teamBuildCaps(){
 function setTeamView(v){ _teamView = v; try { localStorage.setItem(_TEAM_VIEW_KEY, v); } catch(_){} _teamRender(); }
 
 function _teamRender(){
-  [['teamViewCatalogBtn','catalog'],['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewPipelineBtn','pipeline'],['teamViewPlanesBtn','planes'],['teamViewHealthBtn','health'],['teamViewSourcesBtn','sources'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
-  // sidebar: stats (from portal.json) + legend
+  [['teamViewCatalogBtn','catalog'],['teamViewLabelsBtn','labels'],['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewPipelineBtn','pipeline'],['teamViewPlanesBtn','planes'],['teamViewHealthBtn','health'],['teamViewSourcesBtn','sources'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
+  // sidebar: stats (from portal.json) + per-view 中文介绍 + legend
   const info = document.getElementById('teamInfo');
   if (info){
     const st = _teamPortal && _teamPortal.stats;
     let h = st ? `<div class="ti-stat"><b>${_teamEsc((_teamPortal.team)||'team')}</b> · ${st.resources} resources · ${st.roles} roles · ${Object.keys(st.by_kind||{}).length} kinds${st.orphans?` · <span style="color:#b91c1c">${st.orphans} orphan</span>`:''}</div>` : '<div class="ti-stat">team</div>';
+    if (_TEAM_VIEW_INTRO[_teamView]) h += `<div class="ti-intro">${_teamEsc(_TEAM_VIEW_INTRO[_teamView])}</div>`;
     if (_teamView === 'graph') h += '<div class="ti-legend"><span><i style="background:' + _TEAM_AUTONOMY_COLOR.autonomous + '"></i>autonomous</span><span><i style="background:' + _TEAM_AUTONOMY_COLOR['hitl-assistant'] + '"></i>hitl</span><span>◇ brain-side</span><span>ring=live: <i style="background:#ffc233"></i>run <i style="background:#5b8def"></i>ready <i style="background:#e05252"></i>blocked</span></div>';
     info.innerHTML = h;
   }
@@ -156,6 +173,7 @@ function _teamRender(){
   _teamStopLive(); if (_teamCy){ try { _teamCy.destroy(); } catch(_){} _teamCy = null; }
   const center = document.getElementById('teamCenter'); if (!center) return; center.innerHTML = '';
   if (_teamView === 'catalog') _teamRenderCatalog(center);
+  else if (_teamView === 'labels') _teamRenderLabels(center);
   else if (_teamView === 'roster') _teamRenderRoster(center);
   else if (_teamView === 'reuse') _teamRenderReuse(center);
   else if (_teamView === 'pipeline') _teamRenderPipeline(center);
@@ -367,6 +385,27 @@ function _teamSetCatKind(k){ _teamCatKind = k; _teamRender(); }
 function _teamSetCatView(v){ _teamCatViewF = v; _teamRender(); }   // built-in saved views
 function _teamCatSearch(v){ _teamCatQuery = v; _teamCatFill(); }   // refill body only → input keeps focus
 function _teamCatViewPred(r){ const v=_teamCatViewF; if(v==='orphan') return (r.health||[]).includes('orphan'); if(v==='external') return !!r.marketplace; if(v==='nosource') return !r.marketplace && !r.url; return true; }
+
+// Labels (L: label-dimension query) — group resources by a chosen label key
+// (division / hand / project). Answers "按 label 维度看资源分布". design facet.
+function _teamSetLabelDim(d){ _teamLabelDim = d; _teamRender(); }
+async function _teamRenderLabels(center){
+  const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
+  const p = await _teamEnsurePortal(); if (!p){ wrap.innerHTML = '<div style="padding:8px;font-size:12px">No portal data.</div>'; return; }
+  const dim = _teamLabelDim;
+  let h = '<div class="team-cat-bar"><span class="tm-x">label 维度:</span> ' + ['division','hand','project'].map(k => `<button class="team-kind-btn${dim===k?' active':''}" onclick="_teamSetLabelDim('${k}')">${k}</button>`).join('') + '</div>';
+  const groups = {};
+  (p.resources||[]).forEach(r => { const v = (r.labels && r.labels[dim]!=null) ? String(r.labels[dim]) : '(无)'; (groups[v]=groups[v]||[]).push(r); });
+  const keys = Object.keys(groups).sort((a,b)=> groups[b].length-groups[a].length || a.localeCompare(b));
+  h += `<div class="team-cat-count">按 <b>${_teamEsc(dim)}</b> 分 ${keys.length} 组 · ${(p.resources||[]).length} 资源</div><div style="padding:0 2px">`;
+  keys.forEach(v => {
+    h += `<div class="team-div-h">${_teamEsc(dim)} = ${_teamEsc(v)} · ${groups[v].length}</div><div>`;
+    groups[v].sort((a,b)=>(b.consumer_count||0)-(a.consumer_count||0)||a.name.localeCompare(b.name)).forEach(r => { const kb = _TEAM_KIND_BADGE[r.kind]||'tb-shared'; h += `<span class="team-chip" style="cursor:pointer" onclick="_teamSelectResource('${_teamEsc(r.name)}','${_teamEsc(r.kind)}')"><span class="team-badge ${kb}" style="margin:0 4px 0 0">${_teamEsc(r.kind)}</span>${_teamEsc(r.name.replace(/^[^/]*\//,''))} <span class="tm-x">×${r.consumer_count||0}</span></span>`; });
+    h += '</div>';
+  });
+  h += '</div>';
+  wrap.innerHTML = h;
+}
 function _teamCatFill(){
   const body = document.getElementById('teamCatBody'); if (!body || !_teamPortal) return;
   const p = _teamPortal, q = _teamCatQuery.trim().toLowerCase();
