@@ -13,7 +13,9 @@
 
 let _teamData = null, _teamView = null, _teamCy = null, _teamSel = null, _teamStyled = false;
 let _teamLiveTimer = null, _teamPulseTimer = null, _teamPulseOn = false;
+let _teamPortal = null, _teamCatKind = 'all', _teamCatQuery = '';  // resource-centric Catalog (L1)
 const _TEAM_VIEW_KEY = 'hermes-webui-team-view';
+const _TEAM_KIND_BADGE = { skill:'tb-native', plugin:'tb-oss', cli:'tb-mcp', toolset:'tb-shared', mcp:'tb-mcp', role:'tb-self' };
 
 const _TEAM_NATIVE_SKILLS = new Set(['software-development','autonomous-ai-agents','productivity','creative','research','data-science','mlops','devops','social-media','dogfood','github','kanban-orchestrator','kanban-worker']);
 const _TEAM_SELFBUILD_SKILLS = new Set(['writing-plans','write-adr-from-decision','diagramming','encoding-review']);
@@ -68,6 +70,13 @@ function _teamInjectStyle(){
   #panelTeam .team-chip,#teamCenter .team-chip{display:inline-block;font-size:11px;padding:1px 7px;border-radius:6px;background:var(--surface,#f3f4f6);margin:2px 4px 2px 0}
   #panelTeam .ts-sub{color:var(--muted,#6b7280);font-size:12px} #panelTeam .ts-sec{margin:11px 0 4px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#6b7280)}
   #panelTeam #teamDetail h3{margin:0 0 2px;font-size:14px}
+  #teamCenter .team-cat-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 4px;position:sticky;top:0;background:var(--main-bg,#fff);z-index:5;border-bottom:1px solid var(--border,#eee)}
+  #teamCenter .team-kind-btn{padding:3px 10px;font-size:12px;border:1px solid var(--border,#e5e7eb);border-radius:6px;background:var(--bg,#fff);color:var(--muted,#6b7280);cursor:pointer}
+  #teamCenter .team-kind-btn.active{background:var(--accent,#5b8def);color:#fff;border-color:transparent}
+  #teamCenter .team-kind-btn .tk-n{opacity:.7;font-size:10.5px}
+  #teamCenter .team-cat-q{margin-left:auto;padding:4px 10px;font-size:12px;border:1px solid var(--border,#e5e7eb);border-radius:6px;min-width:200px;background:var(--bg,#fff);color:var(--text,#111)}
+  #teamCenter .team-cat-count{padding:6px 2px 2px;font-size:11px;color:var(--muted,#6b7280)}
+  .th-orphan{background:#fdecec;color:#b91c1c;border-color:#f5c6c6} .th-warn{background:#fff4e0;color:#a8620b;border-color:#f3dcb0}
   `;
   const el = document.createElement('style'); el.id = 'teamPanelStyle'; el.textContent = css; document.head.appendChild(el);
 }
@@ -84,7 +93,7 @@ async function loadTeamPanel(force){
     const raw = ((await r.json()) || {}).team || {};
     _teamData = { roster: raw.roster ? jsyaml.load(raw.roster) : null, plugins: raw.plugins ? jsyaml.load(raw.plugins) : null, engines: raw.engines ? jsyaml.load(raw.engines) : null };
   } catch(e){ if (center) center.innerHTML = '<div style="padding:16px;color:#e05252;font-size:12px">Failed to load team: ' + _teamEsc(e && e.message) + '</div>'; return; }
-  _teamView = _teamView || localStorage.getItem(_TEAM_VIEW_KEY) || 'graph';
+  _teamView = _teamView || localStorage.getItem(_TEAM_VIEW_KEY) || 'catalog';
   _teamRender();
 }
 
@@ -117,7 +126,7 @@ function setTeamView(v){ _teamView = v; try { localStorage.setItem(_TEAM_VIEW_KE
 
 function _teamRender(){
   if (!_teamData) return;
-  [['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
+  [['teamViewCatalogBtn','catalog'],['teamViewGraphBtn','graph'],['teamViewRosterBtn','roster'],['teamViewReuseBtn','reuse'],['teamViewCalibrateBtn','calibrate']].forEach(([id,v]) => { const b = document.getElementById(id); if (b) b.classList.toggle('active', _teamView === v); });
   // sidebar: stats + legend
   const info = document.getElementById('teamInfo');
   if (info){
@@ -129,7 +138,8 @@ function _teamRender(){
   // main center
   _teamStopLive(); if (_teamCy){ try { _teamCy.destroy(); } catch(_){} _teamCy = null; }
   const center = document.getElementById('teamCenter'); if (!center) return; center.innerHTML = '';
-  if (_teamView === 'roster') _teamRenderRoster(center);
+  if (_teamView === 'catalog') _teamRenderCatalog(center);
+  else if (_teamView === 'roster') _teamRenderRoster(center);
   else if (_teamView === 'reuse') _teamRenderReuse(center);
   else if (_teamView === 'calibrate') _teamRenderCalibrate(center);
   else _teamRenderGraph(center);
@@ -231,10 +241,75 @@ async function _teamRenderCalibrate(center){
   wrap.innerHTML = html;
 }
 
+// ── Catalog (L1) — resource-centric inventory, reads /api/team/portal ─────────
+// The portal recentres the panel on RESOURCES (skill/plugin/cli/toolset/mcp) with
+// roles as consumers. Data is pre-resolved by gen-portal-view.py (JS does no binding).
+const _TEAM_HEALTH_BADGE = { orphan:{l:'orphan',c:'th-orphan'}, no_desc:{l:'no-desc',c:'th-warn'}, dup_desc:{l:'dup',c:'th-warn'} };
+async function _teamEnsurePortal(){
+  if (_teamPortal) return _teamPortal;
+  try { const r = await fetch('/api/team/portal', { headers:{Accept:'application/json'} }); _teamPortal = ((await r.json())||{}).portal || null; } catch(_){ _teamPortal = null; }
+  return _teamPortal;
+}
+async function _teamRenderCatalog(center){
+  const wrap = document.createElement('div'); wrap.className = 'team-scroll'; center.appendChild(wrap);
+  wrap.innerHTML = '<div style="padding:8px;color:var(--muted);font-size:12px">Loading resources…</div>';
+  const p = await _teamEnsurePortal();
+  if (!p){ wrap.innerHTML = '<div style="font-size:12.5px;line-height:1.7;padding:6px"><b>No portal data.</b> Generate it (or run gen-team.sh):<pre style="background:var(--surface,#f3f4f6);padding:8px;border-radius:6px">python3 team/scripts/gen-portal-view.py</pre></div>'; return; }
+  const kinds = p.stats.by_kind || {};
+  const tabs = [['all','All',(p.resources||[]).length]]
+    .concat(['skill','plugin','cli','toolset','mcp'].map(k => [k,k,kinds[k]||0]))
+    .concat([['role','role',(p.roles||[]).length]]);
+  let h = '<div class="team-cat-bar">';
+  tabs.forEach(([k,lbl,n]) => { h += `<button class="team-kind-btn${_teamCatKind===k?' active':''}" onclick="_teamSetCatKind('${k}')">${_teamEsc(lbl)} <span class="tk-n">${n}</span></button>`; });
+  h += `<input class="team-cat-q" placeholder="search name / does / source…" value="${_teamEsc(_teamCatQuery)}" oninput="_teamCatSearch(this.value)"></div><div id="teamCatBody"></div>`;
+  wrap.innerHTML = h;
+  _teamCatFill();
+}
+function _teamSetCatKind(k){ _teamCatKind = k; _teamRender(); }
+function _teamCatSearch(v){ _teamCatQuery = v; _teamCatFill(); }   // refill body only → input keeps focus
+function _teamCatFill(){
+  const body = document.getElementById('teamCatBody'); if (!body || !_teamPortal) return;
+  const p = _teamPortal, q = _teamCatQuery.trim().toLowerCase();
+  if (_teamCatKind === 'role'){
+    let rows = (p.roles||[]).filter(r => !q || (r.name+' '+(r.does||'')).toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name));
+    let html = `<div class="team-cat-count">${rows.length} roles</div><table class="team-tbl"><thead><tr><th>role</th><th>division</th><th>hand</th><th>tier</th><th>does</th></tr></thead><tbody>`;
+    rows.forEach(r => { const hd=r.hand; html += `<tr class="team-row" onclick="_teamSelectRole('${_teamEsc(r.name)}')"><td><b>${_teamEsc(r.name)}</b>${r.is_orchestrator?' <span class="team-badge tb-official">orch</span>':''}</td><td>${_teamEsc(r.division||'')}</td><td>${_teamEsc((!hd||hd==='none')?'—':hd)}</td><td>${_teamEsc(r.tier||'')}</td><td style="max-width:360px">${_teamEsc(r.does||'')}</td></tr>`; });
+    body.innerHTML = html + '</tbody></table>'; return;
+  }
+  let rows = (p.resources||[]).filter(r => _teamCatKind==='all' || r.kind===_teamCatKind);
+  if (q) rows = rows.filter(r => (r.name+' '+(r.does||'')+' '+(r.marketplace||'')).toLowerCase().includes(q));
+  rows.sort((a,b)=> (b.consumer_count||0)-(a.consumer_count||0) || a.name.localeCompare(b.name));
+  let html = `<div class="team-cat-count">${rows.length} resources · sorted by reuse</div><table class="team-tbl"><thead><tr><th>resource</th><th>kind</th><th>source</th><th>×used</th><th>health</th></tr></thead><tbody>`;
+  rows.forEach(r => {
+    const kb = _TEAM_KIND_BADGE[r.kind] || 'tb-shared';
+    const src = r.marketplace ? _teamEsc(r.marketplace) : (r.kind==='toolset' ? '<span class="tm-x">native</span>' : (r.endpoint ? '<span class="tm-x">'+_teamEsc(r.endpoint)+'</span>' : '—'));
+    const health = (r.health||[]).map(x => { const b=_TEAM_HEALTH_BADGE[x]||{l:x,c:'th-warn'}; return `<span class="team-badge ${b.c}">${b.l}</span>`; }).join('');
+    html += `<tr class="team-row" onclick="_teamSelectResource('${_teamEsc(r.name)}','${_teamEsc(r.kind)}')"><td><b>${_teamEsc(r.name)}</b></td><td><span class="team-badge ${kb}">${_teamEsc(r.kind)}</span></td><td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${src}</td><td>${r.consumer_count||0}</td><td>${health||'<span class="tm-x">ok</span>'}</td></tr>`;
+  });
+  body.innerHTML = html + '</tbody></table>';
+}
+
 // ── detail (sidebar #teamDetail) ─────────────────────────────────────────────
 function _teamSelectRole(name){ _teamSel = { role: name }; if (_teamCy){ _teamCy.nodes('.team-sel').removeClass('team-sel'); const n = _teamCy.getElementById('role__' + name); if (n) n.addClass('team-sel'); } _teamRenderDetail(); }
 function _teamSelectCapability(id){ _teamSel = { cap: id }; if (_teamCy) _teamCy.nodes('.team-sel').removeClass('team-sel'); _teamRenderDetail(); }
-function _teamRenderDetail(){ const el = document.getElementById('teamDetail'); if (!el || !_teamSel) return; if (_teamSel.role) _teamRenderRoleDetail(el, _teamSel.role); else if (_teamSel.cap) _teamRenderCapDetail(el, _teamSel.cap); }
+function _teamSelectResource(name, kind){ _teamSel = { res: name, resKind: kind }; if (_teamCy) _teamCy.nodes('.team-sel').removeClass('team-sel'); _teamRenderDetail(); }
+function _teamRenderDetail(){ const el = document.getElementById('teamDetail'); if (!el || !_teamSel) return; if (_teamSel.role) _teamRenderRoleDetail(el, _teamSel.role); else if (_teamSel.cap) _teamRenderCapDetail(el, _teamSel.cap); else if (_teamSel.res) _teamRenderResourceDetail(el, _teamSel.res, _teamSel.resKind); }
+function _teamRenderResourceDetail(el, name, kind){
+  const r = ((_teamPortal && _teamPortal.resources)||[]).find(x => x.name===name && x.kind===kind); if (!r) return;
+  const mk = (_teamPortal && _teamPortal.marketplaces) || {}, kb = _TEAM_KIND_BADGE[r.kind]||'tb-shared';
+  let h = `<h3>${_teamEsc(r.name)}</h3><div class="ts-sub"><span class="team-badge ${kb}">${_teamEsc(r.kind)}</span> ${(r.health||[]).map(x=>`<span class="team-badge th-orphan">${_teamEsc(x)}</span>`).join('')}</div>`;
+  if (r.does) h += `<div style="margin:8px 0;font-size:12.5px;line-height:1.6">${_teamEsc(r.does)}</div>`;
+  h += '<div class="ts-sec">provenance</div>';
+  if (r.marketplace){ const spec = mk[r.marketplace]||{}, repo = spec.repo ? 'https://github.com/'+spec.repo : (r.url||null); h += `<div class="ts-sub">marketplace <b>${_teamEsc(r.marketplace)}</b>${repo?` · <a href="${_teamEsc(repo)}" target="_blank" rel="noopener">repo</a>`:''}${r.license?` · ${_teamEsc(r.license)}`:''}</div>`; }
+  else if (r.url) h += `<div class="ts-sub"><a href="${_teamEsc(r.url)}" target="_blank" rel="noopener">${_teamEsc(r.url)}</a>${r.license?` · ${_teamEsc(r.license)}`:''}</div>`;
+  else if (r.endpoint) h += `<div class="ts-sub">endpoint <code>${_teamEsc(r.endpoint)}</code></div>`;
+  else h += '<div class="ts-sub">self-built / native</div>';
+  if (r.note) h += `<div class="ts-sub" style="margin-top:4px">${_teamEsc(r.note)}</div>`;
+  if (r.labels && Object.keys(r.labels).length) h += '<div class="ts-sec">labels</div><div>' + Object.entries(r.labels).map(([k,v])=>`<span class="team-chip">${_teamEsc(k)}=${_teamEsc(String(v))}</span>`).join('') + '</div>';
+  h += `<div class="ts-sec">dependents · ×${r.consumer_count||0}</div>`;
+  h += (r.consumers && r.consumers.length) ? '<div>'+r.consumers.map(c=>`<span class="team-chip" style="cursor:pointer" onclick="_teamSelectRole('${_teamEsc(c)}')">${_teamEsc(c)}</span>`).join('')+'</div>' : '<div class="ts-sub">none — ' + ((r.kind==='cli'||r.kind==='toolset')?'ambient/native (not role-bound)':'orphan: unbind or retire') + '</div>';
+  el.innerHTML = h;
+}
 
 function _teamRenderRoleDetail(el, name){
   const r = _teamRole(name); if (!r) return;

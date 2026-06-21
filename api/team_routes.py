@@ -56,10 +56,27 @@ def _team_eval(handler) -> None:
     j(handler, {"summary": summary})
 
 
+def _team_portal(handler) -> None:
+    # Resource-centric portal data (design/team-portal-ui.md). Pre-derived by
+    # team/scripts/gen-portal-view.py (holds the v2 selector-binding engine) into
+    # team/.gen/portal.json, so the WebUI never re-implements binding logic in JS.
+    p = _base() / ".gen" / "portal.json"
+    portal = None
+    try:
+        if p.is_file():
+            portal = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        portal = None
+    j(handler, {"portal": portal})
+
+
 def handle(handler, parsed) -> bool:
     """Dispatch a GET route. Returns True if handled by this module, else False."""
     if parsed.path == "/api/team":
         _team(handler)
+        return True
+    if parsed.path == "/api/team/portal":
+        _team_portal(handler)
         return True
     if parsed.path == "/api/team/eval":
         _team_eval(handler)
