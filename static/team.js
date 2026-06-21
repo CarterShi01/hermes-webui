@@ -164,7 +164,7 @@ function _teamRender(){
   const info = document.getElementById('teamInfo');
   if (info){
     const st = _teamPortal && _teamPortal.stats;
-    let h = st ? `<div class="ti-stat"><b>${_teamEsc((_teamPortal.team)||'team')}</b> · ${st.resources} resources · ${st.roles} roles · ${Object.keys(st.by_kind||{}).length} kinds${st.orphans?` · <span style="color:#b91c1c">${st.orphans} orphan</span>`:''}</div>` : '<div class="ti-stat">team</div>';
+    let h = st ? `<div class="ti-stat"><b>${_teamEsc((_teamPortal.team)||'team')}</b> · ${st.resources} resources · ${st.roles} roles · ${Object.keys(st.by_kind||{}).length} kinds${st.orphans?` · <span style="color:#b91c1c">${st.orphans} orphan</span>`:''}${st.pending_promote?` · <span style="color:#dc2626;cursor:pointer" onclick="setTeamView('health')">⬆ ${st.pending_promote} 待promote</span>`:''}</div>` : '<div class="ti-stat">team</div>';
     if (_TEAM_VIEW_INTRO[_teamView]) h += `<div class="ti-intro">${_teamEsc(_TEAM_VIEW_INTRO[_teamView])}</div>`;
     if (_teamView === 'graph') h += '<div class="ti-legend"><span><i style="background:' + _TEAM_AUTONOMY_COLOR.autonomous + '"></i>autonomous</span><span><i style="background:' + _TEAM_AUTONOMY_COLOR['hitl-assistant'] + '"></i>hitl</span><span>◇ brain-side</span><span>ring=live: <i style="background:#ffc233"></i>run <i style="background:#5b8def"></i>ready <i style="background:#e05252"></i>blocked</span></div>';
     info.innerHTML = h;
@@ -455,6 +455,26 @@ async function _teamRenderHealth(center){
   const resChip = n => `<span class="team-chip" style="cursor:pointer" onclick="_teamSelectResource('${_teamEsc(n)}','${_teamEsc(_teamResKind(n))}')">${_teamEsc(n)}</span>`;
   const card = (title, items, render, empty) => `<div class="team-div-h">${_teamEsc(title)} · ${items.length}</div>` + (items.length ? ('<div>' + items.map(render).join('') + '</div>') : `<div class="ts-sub" style="padding:1px 0 4px">${empty}</div>`);
   let h = '<div style="font-size:12.5px;margin:2px 0 8px;color:var(--muted)">静态治理信号(读 portal)。动态「0 派工角色」需 live board → 运行时 <code>checkup --usage</code>。每条带 STEWARDSHIP 动作。</div>';
+  // ── 待 promote 的候选 skill(Line B 机器自学的;看顺眼就人工搬进资源中心)— 放最上,最 actionable ──
+  const cands = p.candidates || [];
+  h += `<div class="team-div-h" style="color:#b45309">⬆ 待 promote 的候选 skill · ${cands.length}</div>`;
+  if (!cands.length) h += '<div class="ts-sub" style="padding:1px 0 4px">✓ 暂无候选(每周 Hermes 从你的上报里自学;有了会在这评审)</div>';
+  cands.forEach(c => {
+    const sim = (c.similar_declared && c.similar_declared.length)
+      ? `<span class="team-badge th-warn" title="资源中心已有名字相近的,注意别重复 promote">⚠ 近似已有:${c.similar_declared.map(_teamEsc).join(', ')}</span>` : '';
+    const cmd = _teamEsc(c.promote_cmd || '');
+    h += `<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:8px 10px;margin:0 0 9px">`
+      + `<div><b>${_teamEsc(c.skill)}</b> <span class="team-badge tb-self">${_teamEsc(c.role)} 学的</span> <span class="tm-x">${_teamEsc(c.learned_at||'')}</span> ${sim}</div>`
+      + `<div style="font-size:12px;margin:3px 0">${_teamEsc(c.desc||'(无描述)')}</div>`
+      + (c.note ? `<div class="ts-sub" style="font-size:11.5px">来自:${_teamEsc(c.note)}</div>` : '')
+      + `<details style="margin:4px 0"><summary style="cursor:pointer;font-size:11.5px;color:var(--muted)">看全文(自己判断好不好)</summary>`
+      + `<pre style="white-space:pre-wrap;font-size:11px;background:var(--surface,#f8fafc);padding:6px;border-radius:6px;max-height:260px;overflow:auto;margin:4px 0 0">${_teamEsc(c.content||'(读不到内容)')}</pre></details>`
+      + `<div style="display:flex;gap:6px;align-items:center;margin-top:5px">`
+      + `<code style="font-size:11px;background:var(--surface,#f3f4f6);padding:3px 7px;border-radius:5px;flex:1;overflow:auto;white-space:nowrap">${cmd}</code>`
+      + `<button onclick="(navigator.clipboard&&navigator.clipboard.writeText('${cmd}'))" style="font-size:11px;padding:3px 9px;cursor:pointer;border:1px solid var(--border,#e5e7eb);border-radius:5px;background:var(--bg,#fff)">复制命令</button>`
+      + `</div><div class="ts-sub" style="font-size:10.5px;margin-top:3px">门户只读;复制命令到你的 CC/codex 会话人工跑 → 搬进资源中心 + install-team。</div>`
+      + `</div>`;
+  });
   h += card('orphan 资源(无角色消费 → 解 binding 或下线)', H.orphans||[], resChip, '✓ 无孤儿');
   h += card('缺 does 描述(equip 推荐失准 → 补描述)', H.no_desc||[], resChip, '✓ 资源都有描述');
   h += card('描述重复(潜在可合并)', H.dup_desc||[], resChip, '✓ 无重复描述');
@@ -545,3 +565,26 @@ async function _teamApplyLive(){ if (!_teamCy || _teamView !== 'graph') return; 
 function _teamPulseTick(){ if (!_teamCy || _teamView !== 'graph') return; _teamPulseOn = !_teamPulseOn; try { _teamCy.nodes('node[live="running"]').toggleClass('lp', _teamPulseOn); } catch(_){} }
 function _teamStartLive(){ _teamStopLive(); _teamApplyLive(); _teamLiveTimer = setInterval(_teamApplyLive, 9000); _teamPulseTimer = setInterval(_teamPulseTick, 600); }
 function _teamStopLive(){ if (_teamLiveTimer){ clearInterval(_teamLiveTimer); _teamLiveTimer = null; } if (_teamPulseTimer){ clearInterval(_teamPulseTimer); _teamPulseTimer = null; } }
+
+// ── Rail 红点:有待 promote 的候选 skill → Team 导航按钮显 ●N(不打开 Team 也看得见 = 通知)──
+async function _teamUpdateRailDot(){
+  try {
+    const p = await _teamEnsurePortal();
+    const n = (p && p.stats && p.stats.pending_promote) || 0;
+    document.querySelectorAll('[data-panel="team"]').forEach(b => {
+      let d = b.querySelector('.team-promote-dot');
+      if (n > 0){
+        if (!d){
+          d = document.createElement('span'); d.className = 'team-promote-dot';
+          d.style.cssText = 'position:absolute;top:1px;right:1px;min-width:14px;height:14px;padding:0 3px;border-radius:8px;background:#dc2626;color:#fff;font-size:9px;line-height:14px;text-align:center;font-weight:700;box-sizing:border-box;pointer-events:none';
+          b.style.position = 'relative'; b.appendChild(d);
+        }
+        d.textContent = n > 9 ? '9+' : String(n);
+        d.title = n + ' 条 skill 待 promote(Team → 体检/治理)';
+      } else if (d){ d.remove(); }
+    });
+  } catch(_){}
+}
+try { (document.readyState === 'loading')
+  ? document.addEventListener('DOMContentLoaded', () => setTimeout(_teamUpdateRailDot, 700))
+  : setTimeout(_teamUpdateRailDot, 700); } catch(_){}
