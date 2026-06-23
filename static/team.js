@@ -164,7 +164,7 @@ function _teamRender(){
   const info = document.getElementById('teamInfo');
   if (info){
     const st = _teamPortal && _teamPortal.stats;
-    let h = st ? `<div class="ti-stat"><b>${_teamEsc((_teamPortal.team)||'team')}</b> · ${st.resources} resources · ${st.roles} roles · ${Object.keys(st.by_kind||{}).length} kinds${st.orphans?` · <span style="color:#b91c1c">${st.orphans} orphan</span>`:''}${st.pending_promote?` · <span style="color:#dc2626;cursor:pointer" onclick="setTeamView('health')">⬆ ${st.pending_promote} 待promote</span>`:''}</div>` : '<div class="ti-stat">team</div>';
+    let h = st ? `<div class="ti-stat"><b>${_teamEsc((_teamPortal.team)||'team')}</b> · ${st.resources} resources · ${st.roles} roles · ${Object.keys(st.by_kind||{}).length} kinds${st.orphans?` · <span style="color:#b91c1c">${st.orphans} orphan</span>`:''}${st.pending_promote?` · <span style="color:#dc2626;cursor:pointer" onclick="setTeamView('health')">⬆ ${st.pending_promote} 待promote</span>`:''}${st.pending_suggestions?` · <span style="color:#7c3aed;cursor:pointer" onclick="setTeamView('health')">🔧 ${st.pending_suggestions} 待优化</span>`:''}</div>` : '<div class="ti-stat">team</div>';
     if (_TEAM_VIEW_INTRO[_teamView]) h += `<div class="ti-intro">${_teamEsc(_TEAM_VIEW_INTRO[_teamView])}</div>`;
     if (_teamView === 'graph') h += '<div class="ti-legend"><span><i style="background:' + _TEAM_AUTONOMY_COLOR.autonomous + '"></i>autonomous</span><span><i style="background:' + _TEAM_AUTONOMY_COLOR['hitl-assistant'] + '"></i>hitl</span><span>◇ brain-side</span><span>ring=live: <i style="background:#ffc233"></i>run <i style="background:#5b8def"></i>ready <i style="background:#e05252"></i>blocked</span></div>';
     info.innerHTML = h;
@@ -488,6 +488,23 @@ async function _teamRenderHealth(center){
       + `</div>`
       + `</div>`;
   });
+  // ── 团队优化建议(team-builder 定期体检自己写的台账;Line-B 候选 skill 的对偶)──
+  const sugs = p.suggestions || [];
+  const _pc = { high:'#dc2626', medium:'#d97706', low:'#6b7280' };
+  h += `<div class="team-div-h" style="color:#7c3aed">🔧 团队优化建议 · ${sugs.length}</div>`;
+  if (!sugs.length) h += '<div class="ts-sub" style="padding:1px 0 4px">✓ 暂无优化建议(team-builder 定期体检扫出结构债会在这列;每条可一键交回它处理)</div>';
+  sugs.forEach(s => {
+    const tg = (s.targets||[]).map(_teamEsc).join(', '), id = _teamEsc(s.id);
+    h += `<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:8px 10px;margin:0 0 9px">`
+      + `<div><span class="team-badge" style="background:${_pc[s.priority]||'#6b7280'};color:#fff">${_teamEsc(s.priority)}</span> <b>${_teamEsc(s.title)}</b> <span class="team-badge tb-shared">${_teamEsc(s.type||s.dimension||'')}</span></div>`
+      + `<div style="font-size:12px;margin:3px 0">${_teamEsc(s.reason||'')}</div>`
+      + (tg ? `<div class="ts-sub" style="font-size:11.5px">涉及:${tg}</div>` : '')
+      + `<div style="margin-top:5px;font-size:10.5px;color:var(--muted)">复制下面这段 → 去和 <b>team-builder</b> 聊,它会核实 + 给方案 + diff,你确认后它 team_apply:</div>`
+      + `<div style="display:flex;gap:6px;align-items:flex-start;margin-top:4px">`
+      + `<div id="sg-out-${id}" style="font-size:11px;background:var(--bg,#fff);padding:5px 8px;border-radius:5px;flex:1;line-height:1.5;border:1px solid var(--border,#eee)">${_teamEsc(s.handoff||'')}</div>`
+      + `<button onclick="_teamSuggestCopy('${id}')" style="font-size:11px;padding:3px 11px;cursor:pointer;border:1px solid #7c3aed;color:#fff;background:#7c3aed;border-radius:5px;white-space:nowrap">复制给 team-builder</button>`
+      + `</div></div>`;
+  });
   h += card('orphan 资源(无角色消费 → 解 binding 或下线)', H.orphans||[], resChip, '✓ 无孤儿');
   h += card('缺 does 描述(equip 推荐失准 → 补描述)', H.no_desc||[], resChip, '✓ 资源都有描述');
   h += card('描述重复(潜在可合并)', H.dup_desc||[], resChip, '✓ 无重复描述');
@@ -609,12 +626,20 @@ function _teamPromoteCopy(role, skill){
   const o = document.getElementById('pf-out-' + skill);
   if (o){ const bg = o.style.background; o.style.background = '#dcfce7'; setTimeout(() => { o.style.background = bg; }, 700); }
 }
+// ── 优化建议:复制 handoff 指令给 team-builder(候选 promote 的对偶)──
+function _teamSuggestCopy(id){
+  const s = ((_teamPortal && _teamPortal.suggestions) || []).find(x => x.id === id); if (!s) return;
+  try { navigator.clipboard && navigator.clipboard.writeText(s.handoff || ''); } catch(_){}
+  const o = document.getElementById('sg-out-' + id);
+  if (o){ const bg = o.style.background; o.style.background = '#dcfce7'; setTimeout(() => { o.style.background = bg; }, 700); }
+}
 
-// ── Rail 红点:有待 promote 的候选 skill → Team 导航按钮显 ●N(不打开 Team 也看得见 = 通知)──
+// ── Rail 红点:有待 promote 的候选 skill / 待处理优化建议 → Team 导航按钮显 ●N(= 通知)──
 async function _teamUpdateRailDot(){
   try {
     const p = await _teamEnsurePortal();
-    const n = (p && p.stats && p.stats.pending_promote) || 0;
+    const st = (p && p.stats) || {};
+    const n = (st.pending_promote || 0) + (st.pending_suggestions || 0);
     document.querySelectorAll('[data-panel="team"]').forEach(b => {
       let d = b.querySelector('.team-promote-dot');
       if (n > 0){
@@ -624,7 +649,7 @@ async function _teamUpdateRailDot(){
           b.style.position = 'relative'; b.appendChild(d);
         }
         d.textContent = n > 9 ? '9+' : String(n);
-        d.title = n + ' 条 skill 待 promote(Team → 体检/治理)';
+        d.title = `${st.pending_promote||0} 条 skill 待 promote · ${st.pending_suggestions||0} 条团队优化建议(Team → 体检/治理)`;
       } else if (d){ d.remove(); }
     });
   } catch(_){}
