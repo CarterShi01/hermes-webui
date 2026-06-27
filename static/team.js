@@ -21,10 +21,10 @@ const _TEAM_KIND_BADGE = { skill:'tb-native', plugin:'tb-oss', cli:'tb-mcp', too
 let _teamLabelDim = 'division';  // Labels 视图当前维度
 // 每个 tab 顶部的一句话中文介绍(看什么)
 const _TEAM_VIEW_INTRO = {
-  catalog: '资源目录:全部 skill/mcp/cli/plugin/toolset 一张表,按 kind 筛、按复用排序;点行看详情。',
+  catalog: '资源目录:全部 skill/mcp/cc-plugin 一张表,按 kind 筛、按复用排序;点行看详情。',
   labels: '按 label 维度查:挑 division/hand/project,把资源分组看分布(谁挂在哪个维度下)。',
   graph: '组织树:角色按部门挂在 cto/看板下;ring 实时点亮谁在干。',
-  roster: '花名册表:角色 × tier/autonomy/hand/skills 一览。',
+  roster: '花名册表:角色 × division/hand/skills/does 一览。',
   reuse: '复用矩阵:资源×角色,深蓝=直接绑定 / 浅蓝=组级继承——看什么被谁复用。',
   pipeline: '分发管线:一个资源 → 哪些角色 → 哪只手,带"改它冲击谁"影响分析。',
   planes: '操作面 & 生命周期:5 个 /team 入口面 ↔ 对齐 profile + agent-ops 9 站工具。',
@@ -37,7 +37,7 @@ const _TEAM_NATIVE_SKILLS = new Set(['software-development','autonomous-ai-agent
 const _TEAM_SELFBUILD_SKILLS = new Set(['writing-plans','write-adr-from-decision','diagramming','encoding-review']);
 const _TEAM_DIV_ORDER = ['leadership','engineering','product','design','data','domain','gtm-marketing','gtm-sales','ops-finance','ops-support','strategy'];
 const _TEAM_DIV_COLORS = { leadership:'#b8860b', engineering:'#5b8def', product:'#0288a8', design:'#a855f7', data:'#3fa45b', domain:'#e0852e', 'gtm-marketing':'#e0529c', 'gtm-sales':'#d4a017', 'ops-finance':'#16a34a', 'ops-support':'#0ea5e9', strategy:'#6b7280' };
-const _TEAM_AUTONOMY_COLOR = { autonomous:'#3fa45b', 'hitl-assistant':'#b8860b', none:'#9aa0a6' };
+// _TEAM_AUTONOMY_COLOR 已删:autonomy 维度在 core 简化时移除(Step3a 删 tier/autonomy/tenant);图节点改按 division 上色。
 const _TEAM_SRC_COLOR = { 'tb-native':'#3fa45b','tb-self':'#7c3aed','tb-oss':'#1a56db','tb-official':'#a8620b','tb-mcp':'#0a6e80','tb-shared':'#64748b' };
 
 function _teamEsc(s){ return (typeof esc === 'function') ? esc(s) : String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -136,7 +136,7 @@ function _teamRoles(){ return (_teamData && _teamData.roster && _teamData.roster
 function _teamDefaults(){ return (_teamData && _teamData.roster && _teamData.roster.defaults) || {}; }
 function _teamRole(name){ return _teamRoles().find(r => r.name === name) || null; }
 function _teamField(r, k){ const d = _teamDefaults(); return (r[k] !== undefined && r[k] !== null) ? r[k] : d[k]; }
-function _teamPluginsFor(role){ /* ADR 0014: per-role/shared plugin assignment moved into roster (catalog/assignment split); plugins.yaml is now a pure marketplace catalog. */ const D = (_teamData && _teamData.roster && _teamData.roster.defaults) || {}; const r = _teamRole(role); const shared = [].concat(D.plugins || []); const dp = D.division_plugins || {}; if (r && r.division && dp[r.division]) shared.push(...dp[r.division]); return { shared, role: [].concat((r && r.plugins) || []) }; }
+function _teamPluginsFor(role){ /* ADR 0034: 组级/共享插件已并入 roster bindings;gen-roster-view 把"直接 bind + 组级继承"全解析进 r.plugins,defaults 不再带 plugins/division_plugins(故 shared 恒空)。direct-vs-inherited 的拆分见 portal.json(Reuse 视图用)。 */ const r = _teamRole(role); return { shared: [], role: [].concat((r && r.plugins) || []) }; }
 function _teamPluginBadge(entry){ const i = entry.indexOf('/'); const mkt = i >= 0 ? entry.slice(0, i) : entry, plugin = i >= 0 ? entry.slice(i + 1) : null; if (mkt === 'official') return { label: (plugin || entry) + ' · official', cls: 'tb-official' }; const m = (_teamData.plugins && _teamData.plugins.marketplaces) || {}, spec = m[mkt] || {}; return { label: (plugin ? plugin + ' · ' : '') + mkt + (spec.type === 'skillkit' ? ' · skillkit' : ''), cls: 'tb-oss' }; }
 function _teamSkillBadge(sk){ if (_TEAM_NATIVE_SKILLS.has(sk)) return { label: sk + ' · Hermes', cls: 'tb-native' }; if (_TEAM_SELFBUILD_SKILLS.has(sk)) return { label: sk + ' · self-build', cls: 'tb-self' }; return { label: sk, cls: 'tb-shared' }; }
 function _teamPluginRepo(entry){ const i = entry.indexOf('/'); const mkt = i >= 0 ? entry.slice(0, i) : entry; if (mkt === 'official') return 'https://github.com/anthropics/claude-plugins-official'; const m = (_teamData.plugins && _teamData.plugins.marketplaces) || {}, spec = m[mkt]; return spec && spec.repo ? 'https://github.com/' + spec.repo : null; }
@@ -166,7 +166,7 @@ function _teamRender(){
     const st = _teamPortal && _teamPortal.stats;
     let h = st ? `<div class="ti-stat"><b>${_teamEsc((_teamPortal.team)||'team')}</b> · ${st.resources} resources · ${st.roles} roles · ${Object.keys(st.by_kind||{}).length} kinds${st.orphans?` · <span style="color:#b91c1c">${st.orphans} orphan</span>`:''}${st.pending_promote?` · <span style="color:#dc2626;cursor:pointer" onclick="setTeamView('health')">⬆ ${st.pending_promote} 待promote</span>`:''}${st.pending_suggestions?` · <span style="color:#7c3aed;cursor:pointer" onclick="setTeamView('health')">🔧 ${st.pending_suggestions} 待优化</span>`:''}</div>` : '<div class="ti-stat">team</div>';
     if (_TEAM_VIEW_INTRO[_teamView]) h += `<div class="ti-intro">${_teamEsc(_TEAM_VIEW_INTRO[_teamView])}</div>`;
-    if (_teamView === 'graph') h += '<div class="ti-legend"><span><i style="background:' + _TEAM_AUTONOMY_COLOR.autonomous + '"></i>autonomous</span><span><i style="background:' + _TEAM_AUTONOMY_COLOR['hitl-assistant'] + '"></i>hitl</span><span>◇ brain-side</span><span>ring=live: <i style="background:#ffc233"></i>run <i style="background:#5b8def"></i>ready <i style="background:#e05252"></i>blocked</span></div>';
+    if (_teamView === 'graph') h += '<div class="ti-legend"><span>color = division</span><span>◇ brain-side</span><span>ring=live: <i style="background:#ffc233"></i>run <i style="background:#5b8def"></i>ready <i style="background:#e05252"></i>blocked</span></div>';
     info.innerHTML = h;
   }
   // main center
@@ -195,7 +195,7 @@ async function _teamRenderGraph(center){
   _teamRoles().forEach(r => {
     if (!seen[r.division]){ seen[r.division] = 1; nodes.push({ data: { id: 'div__' + r.division, label: r.division, kind: 'div', color: _TEAM_DIV_COLORS[r.division] || '#6b7280' } }); edges.push({ data: { id: 'e_root_' + r.division, source: '__root', target: 'div__' + r.division } }); }
     const hand = _teamField(r, 'hand'); const brain = (!hand || hand === 'none') ? 1 : 0;
-    nodes.push({ data: { id: 'role__' + r.name, label: r.name, kind: 'role', role: r.name, color: _TEAM_AUTONOMY_COLOR[r.autonomy] || '#6b7280', tier: r.tier || 'optional', brain } });
+    nodes.push({ data: { id: 'role__' + r.name, label: r.name, kind: 'role', role: r.name, color: _TEAM_DIV_COLORS[r.division] || '#6b7280', brain } });
     edges.push({ data: { id: 'e_' + r.division + '_' + r.name, source: 'div__' + r.division, target: 'role__' + r.name } });
   });
   _teamCy = cytoscape({ container: host, elements: { nodes, edges }, style: [
@@ -204,7 +204,6 @@ async function _teamRenderGraph(center){
       { selector: 'node[kind="div"]', style: { 'background-color': 'data(color)', 'font-size': 11 } },
       { selector: 'node[kind="role"]', style: { 'background-color': 'data(color)' } },
       { selector: 'node[brain=1]', style: { 'shape': 'round-diamond', 'border-width': 2, 'border-color': '#111827' } },
-      { selector: 'node[tier="core"]', style: { 'border-width': 3, 'border-color': '#111827' } },
       { selector: 'edge', style: { 'width': 1.5, 'line-color': '#cbd5e1', 'target-arrow-color': '#cbd5e1', 'target-arrow-shape': 'triangle', 'curve-style': 'bezier' } },
       { selector: 'node[kind="role"][live="running"]', style: { 'border-width': 5, 'border-color': '#ffc233' } },
       { selector: 'node[kind="role"][live="blocked"]', style: { 'border-width': 4, 'border-color': '#e05252' } },
@@ -231,8 +230,8 @@ async function _teamRenderRoster(center){
   let html = '';
   _TEAM_DIV_ORDER.concat(Object.keys(byDiv).filter(d => !_TEAM_DIV_ORDER.includes(d))).forEach(div => {
     const rows = byDiv[div]; if (!rows) return;
-    html += `<div class="team-div-h">${_teamEsc(div)}</div><table class="team-tbl"><thead><tr><th>role</th><th>tier</th><th>autonomy</th><th>hand</th><th>skills</th><th>does</th></tr></thead><tbody>`;
-    rows.sort((a,b)=>(a.tier!=='core')-(b.tier!=='core')||a.name.localeCompare(b.name)).forEach(r => { const h = _teamField(r,'hand'); html += `<tr class="team-row" onclick="_teamSelectRole('${_teamEsc(r.name)}')"><td><b>${_teamEsc(r.name)}</b></td><td>${_teamEsc(r.tier||'')}</td><td>${_teamEsc(r.autonomy||'')}</td><td>${_teamEsc((!h||h==='none')?'—':h)}</td><td>${(r.skills||[]).map(s=>'<span class="team-chip">'+_teamEsc(s)+'</span>').join('')}</td><td style="max-width:340px">${_teamEsc(r.does||'')}</td></tr>`; });
+    html += `<div class="team-div-h">${_teamEsc(div)}</div><table class="team-tbl"><thead><tr><th>role</th><th>hand</th><th>skills</th><th>does</th></tr></thead><tbody>`;
+    rows.sort((a,b)=>a.name.localeCompare(b.name)).forEach(r => { const h = _teamField(r,'hand'); html += `<tr class="team-row" onclick="_teamSelectRole('${_teamEsc(r.name)}')"><td><b>${_teamEsc(r.name)}</b>${r.is_orchestrator?' <span class="team-badge tb-official">orch</span>':''}</td><td>${_teamEsc((!h||h==='none')?'—':h)}</td><td>${(r.skills||[]).map(s=>'<span class="team-chip">'+_teamEsc(s)+'</span>').join('')}</td><td style="max-width:340px">${_teamEsc(r.does||'')}</td></tr>`; });
     html += '</tbody></table>';
   });
   wrap.innerHTML = html;
@@ -411,8 +410,8 @@ function _teamCatFill(){
   const p = _teamPortal, q = _teamCatQuery.trim().toLowerCase();
   if (_teamCatKind === 'role'){
     let rows = (p.roles||[]).filter(r => !q || (r.name+' '+(r.does||'')).toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name));
-    let html = `<div class="team-cat-count">${rows.length} roles</div><table class="team-tbl"><thead><tr><th>role</th><th>division</th><th>hand</th><th>tier</th><th>does</th></tr></thead><tbody>`;
-    rows.forEach(r => { const hd=r.hand; html += `<tr class="team-row" onclick="_teamSelectRole('${_teamEsc(r.name)}')"><td><b>${_teamEsc(r.name)}</b>${r.is_orchestrator?' <span class="team-badge tb-official">orch</span>':''}</td><td>${_teamEsc(r.division||'')}</td><td>${_teamEsc((!hd||hd==='none')?'—':hd)}</td><td>${_teamEsc(r.tier||'')}</td><td style="max-width:360px">${_teamEsc(r.does||'')}</td></tr>`; });
+    let html = `<div class="team-cat-count">${rows.length} roles</div><table class="team-tbl"><thead><tr><th>role</th><th>division</th><th>hand</th><th>does</th></tr></thead><tbody>`;
+    rows.forEach(r => { const hd=r.hand; html += `<tr class="team-row" onclick="_teamSelectRole('${_teamEsc(r.name)}')"><td><b>${_teamEsc(r.name)}</b>${r.is_orchestrator?' <span class="team-badge tb-official">orch</span>':''}</td><td>${_teamEsc(r.division||'')}</td><td>${_teamEsc((!hd||hd==='none')?'—':hd)}</td><td style="max-width:360px">${_teamEsc(r.does||'')}</td></tr>`; });
     body.innerHTML = html + '</tbody></table>'; return;
   }
   let rows = (p.resources||[]).filter(r => (_teamCatKind==='all' || r.kind===_teamCatKind) && _teamCatViewPred(r));
@@ -565,7 +564,7 @@ function _teamRenderRoleDetail(el, name){
   const prow = (e, sh) => { const b = _teamPluginBadge(e); return `<span class="team-badge ${b.cls}"${clk('plugin:'+e)}>${_teamEsc(b.label)}</span>${sh ? '<span class="team-badge tb-shared">shared</span>' : ''}`; };
   const plugins = isBrain ? '<span class="ts-sub">brain-side — no CC plugins</span>' : ((shared.map(e=>prow(e,true)).join('') + own.map(e=>prow(e,false)).join('')) || '<span class="ts-sub">base layer only</span>');
   const mcp = (r.mcp || []).map(x => `<span class="team-badge tb-mcp"${clk('mcp:'+x)}>${_teamEsc(x)} · MCP</span>`).join('') || '<span class="ts-sub">—</span>';
-  el.innerHTML = `<h3>${_teamEsc(r.name)}</h3><div class="ts-sub">${_teamEsc(r.division)} · ${_teamEsc(r.tier||'')} · ${_teamEsc(r.autonomy||'')}</div>`
+  el.innerHTML = `<h3>${_teamEsc(r.name)}</h3><div class="ts-sub">${_teamEsc(r.division)}${(()=>{const h=_teamField(r,'hand');return (h&&h!=='none')?' · '+_teamEsc(h):'';})()}</div>`
     + `<div style="margin-top:6px;font-size:12.5px">${_teamEsc(r.does || '')}</div>`
     + `<div class="ts-sec">hand (engine · L4a)</div><div style="font-size:12.5px">${_teamEsc(handLine)}</div>`
     + `<div class="ts-sec">toolsets</div><div>${(r.toolsets||[]).map(x=>'<span class="team-chip">'+_teamEsc(x)+'</span>').join('')||'—'}</div>`

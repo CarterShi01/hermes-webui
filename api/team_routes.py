@@ -24,7 +24,7 @@ def _team(handler) -> None:
     # ADR 0016: catalog/ dissolved — plugins/engines moved under bridge/ (OC's external-execution layer);
     # docs under docs/. Keys stay the same so team.js is unaffected.
     # ADR 0034: the v2 roster nests fields under labels/descriptor/bind; static/team.js reads
-    # v1-flat fields (r.division/r.tier/r.hand/r.does/...). Serve the role_view-resolved v1-flat
+    # v1-flat fields (r.division/r.hand/r.does/r.skills/r.mcp/r.plugins/...). Serve the role_view-resolved v1-flat
     # roster (team/.gen/roster.v1.json, written by team/scripts/gen-roster-view.py at install-team
     # time) so the WebUI never re-implements the v2 selector-binding engine in JS. Fall back to the
     # raw roster.yaml if the gen artifact is absent (fresh checkout before install-team).
